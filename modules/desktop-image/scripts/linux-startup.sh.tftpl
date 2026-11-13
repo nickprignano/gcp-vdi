@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+META="http://metadata.google.internal/computeMetadata/v1"
+H="Metadata-Flavor: Google"
+OWNER_EMAIL=$(curl -fsSL -H "$H" "$META/instance/attributes/vdi-owner-email" || echo "unknown@local")
+OWNER_HASH=$(curl -fsSL -H "$H" "$META/instance/attributes/vdi-owner-hash" || echo "default")
+VM_NAME=$(curl -fsSL -H "$H" "$META/instance/name")
+ZONE=$(curl -fsSL -H "$H" "$META/instance/zone" | awk -F/ '{print $NF}')
+PROJECT=$(curl -fsSL -H "$H" "$META/project/project-id")
+
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v rustdesk >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y -qq xfce4 xfce4-goodies dbus-x11 rclone curl jq python3 %{ if enable_browser_fallback }xrdp%{ endif }
+  curl -fsSL -o /tmp/rustdesk.deb "https://github.com/rustdesk/rustdesk/releases/download/1.3.2/rustdesk-1.3.2-x86_64.deb"
+  apt-get install -y -qq /tmp/rustdesk.deb || apt-get install -f -y -qq
+  rm -f /tmp/rustdesk.deb
+fi
+
+id -u vdi >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo vdi
+echo "vdi ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vdi
+
+# Configure rclone for GCS using GCE VM service account
+mkdir -p /root/.config/rclone
+cat <<'EOF' > /root/.config/rclone/rclone.conf
+[gcs]
+type = google cloud storage
+env_auth = true
+bucket_policy_only = true
+EOF
+
+# Restore user home directory from GCS
+rclone sync "gcs:${home_bucket_name}/users/$OWNER_HASH/home" /home/vdi --create-empty-src-dirs || true
+chown -R vdi:vdi /home/vdi
+
+# Fetch RustDesk public key from GCS and configure client
+PUB_KEY=$(gcloud storage cat "gs://${home_bucket_name}/rustdesk/id_ed25519.pub" 2>/dev/null || true)
+mkdir -p /home/vdi/.config/rustdesk /root/.config/rustdesk
+cat <<EOF > /root/.config/rustdesk/RustDesk2.toml
+rendezvous_server = '${rustdesk_host}:21116'
+nat_type = 1
+serial = 0
+
+[options]
+custom-rendezvous-server = '${rustdesk_host}'
+relay-server = '${rustdesk_host}'
+key = '$PUB_KEY'
+EOF
+cp /root/.config/rustdesk/RustDesk2.toml /home/vdi/.config/rustdesk/RustDesk2.toml
+chown -R vdi:vdi /home/vdi/.config/rustdesk
+
+# Generate ephemeral per-boot RustDesk password and register with broker
+EPHEMERAL_PW=$(tr -dc 'A-Za-z0-9!@#%' </dev/urandom | head -c 20 || openssl rand -base64 16)
+systemctl enable --now rustdesk
+sleep 3
+rustdesk --password "$EPHEMERAL_PW" || true
+RD_ID=$(rustdesk --get-id | tr -d '\r\n' || echo "pending")
+
+curl -fsSL -X POST "${broker_register_url}" \
+  -H "Authorization: Bearer ${broker_register_secret}" \
+  -H "Content-Type: application/json" \
+  -d "{\"owner_email\":\"$OWNER_EMAIL\",\"vm_name\":\"$VM_NAME\",\"kind\":\"gcp-spot\",\"rustdesk_id\":\"$RD_ID\",\"ephemeral_password\":\"$EPHEMERAL_PW\"}" || true
+
+# Periodic 5-min rclone sync + Spot preemption shutdown hook + idle reaper
+cat <<EOF > /usr/local/bin/vdi-sync.sh
+#!/usr/bin/env bash
+rclone sync /home/vdi "gcs:${home_bucket_name}/users/$OWNER_HASH/home" --exclude ".cache/**"
+EOF
+chmod +x /usr/local/bin/vdi-sync.sh
+
+cat <<'EOF' > /etc/systemd/system/vdi-sync.service
+[Unit]
+Description=Sync /home/vdi to GCS
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vdi-sync.sh
+EOF
+
+cat <<'EOF' > /etc/systemd/system/vdi-sync.timer
+[Unit]
+Description=Periodic GCS home sync
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+systemctl enable --now vdi-sync.timer
+
+# Idle reaper (self-delete after idle_timeout_minutes)
+cat <<EOF > /usr/local/bin/vdi-reaper.sh
+#!/usr/bin/env bash
+IDLE_MINS=\$(awk '{print int(\$1/60)}' /proc/uptime)
+if [ "\$IDLE_MINS" -ge ${idle_timeout_minutes} ] && ! pgrep -x rustdesk >/dev/null; then
+  /usr/local/bin/vdi-sync.sh
+  gcloud compute instances delete "$VM_NAME" --zone="$ZONE" --project="$PROJECT" --quiet
+fi
+EOF
+chmod +x /usr/local/bin/vdi-reaper.sh

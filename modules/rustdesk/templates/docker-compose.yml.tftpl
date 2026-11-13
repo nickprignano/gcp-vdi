@@ -1,0 +1,18 @@
+services:
+  hbbs:
+    image: ${image_hbbs}
+    container_name: hbbs
+    command: hbbs -r ${relay_host}:21117 -k _
+    volumes:
+      - /var/lib/rustdesk:/root
+    network_mode: host
+    restart: unless-stopped
+
+  hbbr:
+    image: ${image_hbbr}
+    container_name: hbbr
+    command: hbbr -k _
+    volumes:
+      - /var/lib/rustdesk:/root
+    network_mode: host
+    restart: unless-stopped

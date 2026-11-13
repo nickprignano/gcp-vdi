@@ -1,0 +1,10 @@
+project_id             = "your-gcp-team-project"
+region                 = "us-central1"
+zone                   = "us-central1-a"
+domain                 = "vdi.example.com"
+oauth_client_id        = "REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+oauth_client_secret    = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
+allowed_emails         = ["alice@example.com", "bob@example.com"]
+broker_register_secret = "replace-with-a-random-32-char-secret"
+desktop_machine_type   = "e2-standard-4"
+enable_browser_fallback = false

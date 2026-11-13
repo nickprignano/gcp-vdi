@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 0" # Weekly automated golden-image rebuild
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+      - name: Validate Examples
+        run: |
+          for dir in examples/lab examples/team examples/enterprise; do
+            echo "Validating $dir"
+            terraform -chdir="$dir" init -backend=false
+            terraform -chdir="$dir" validate
+          done
+
+  broker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build & Test Go Broker
+        run: |
+          go vet ./...
+          go build -o /tmp/gcp-vdi-broker ./cmd/broker
+
+  packer-golden-image:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [terraform, broker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        if: vars.GCP_WIF_PROVIDER != ''
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PACKER_SA }}
+      - uses: hashicorp/setup-packer@main
+      - name: Build Linux XFCE Golden Image
+        if: vars.GCP_PROJECT_ID != ''
+        run: |
+          packer init packer/linux-xfce/ubuntu-rustdesk.pkr.hcl
+          packer build -var "project_id=${{ vars.GCP_PROJECT_ID }}" packer/linux-xfce/ubuntu-rustdesk.pkr.hcl

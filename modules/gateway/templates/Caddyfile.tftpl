@@ -1,0 +1,16 @@
+${site_host} {
+  encode zstd gzip
+
+  # Desktop-to-broker registration endpoint (secured via bearer secret, bypasses oauth2-proxy)
+  handle /api/v1/devices/register {
+    reverse_proxy ${broker_upstream}
+  }
+
+  # All user portal & API routes gated by oauth2-proxy
+  handle {
+    reverse_proxy 127.0.0.1:4180 {
+      header_up Host {host}
+      header_up X-Real-IP {remote_host}
+    }
+  }
+}

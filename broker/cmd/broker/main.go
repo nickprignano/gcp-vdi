@@ -782,7 +782,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   <style>
     :root { --bg: #0b1120; --card: #111827; --border: #1f2937; --text: #f3f4f6; --muted: #9ca3af; --blue: #3b82f6; --green: #10b981; --amber: #f59e0b; --red: #ef4444; }
     body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--bg); color: var(--text); line-height: 1.5; }
-    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.5rem; }
+    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.65rem; }
     .header h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.02em; }
     .user-pill { font-size: 0.85rem; color: var(--muted); background: var(--card); border: 1px solid var(--border); padding: 0.3rem 0.75rem; border-radius: 999px; }
     .card { background: var(--card); border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1rem; border: 1px solid var(--border); }
@@ -824,6 +824,11 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       <span class="user-pill">{{.Email}}</span>
     </div>
   </div>
+
+  <p style="margin:0 0 1.25rem;color:var(--muted);font-size:0.9rem">
+    On-demand Ubuntu 24.04 XFCE Spot desktops in Google Cloud, fronted by Google OAuth with 1-click browser SSO or self-hosted RustDesk.
+    Your <code>/home/vdi</code> directory persists to Cloud Storage across sessions (with optional <code>~/GoogleDrive</code> mount), and VMs auto-destroy after {{.MaxHours}}h.
+  </p>
 
   <div class="card">
     <div class="actions">

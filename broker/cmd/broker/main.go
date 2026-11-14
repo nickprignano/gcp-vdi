@@ -393,6 +393,7 @@ func (b *Broker) handleStatus(w http.ResponseWriter, r *http.Request) {
 type wakePayload struct {
 	MachineType string `json:"machine_type"`
 	DiskProfile string `json:"disk_profile"`
+	DarkMode    bool   `json:"dark_mode"`
 }
 
 func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +414,7 @@ func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vmName := vmNameForEmail(email)
-	if err := b.createGCEInstance(r.Context(), vmName, email, profile.MachineType, disk.SizeGB, disk.Type); err != nil {
+	if err := b.createGCEInstance(r.Context(), vmName, email, profile.MachineType, disk.SizeGB, disk.Type, wp.DarkMode); err != nil {
 		http.Error(w, fmt.Sprintf("wake failed: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -623,7 +624,7 @@ func (b *Broker) gceAccessToken(ctx context.Context) (string, error) {
 	return tok.AccessToken, nil
 }
 
-func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, machineType string, diskSizeGB int, diskType string) error {
+func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, machineType string, diskSizeGB int, diskType string, darkMode bool) error {
 	if b.cfg.ProjectID == "" || b.cfg.InstanceTemplate == "" {
 		return errors.New("GCP_PROJECT_ID and GCE_INSTANCE_TEMPLATE must be configured")
 	}
@@ -636,9 +637,14 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, mach
 
 	// Fetch template metadata and sourceImage so we merge (not overwrite) startup-script/disks.
 	items, sourceImage := b.fetchInstanceTemplate(ctx, token)
+	darkVal := "false"
+	if darkMode {
+		darkVal = "true"
+	}
 	items = append(items,
 		map[string]string{"key": "vdi-owner-email", "value": ownerEmail},
 		map[string]string{"key": "vdi-owner-hash", "value": ownerHash},
+		map[string]string{"key": "vdi-dark-mode", "value": darkVal},
 	)
 
 	body := map[string]any{
@@ -888,6 +894,9 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       <select id="diskSelect">
         {{range .DiskProfiles}}<option value="{{.ID}}" {{if eq .ID "40-pd-balanced"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
+      <label style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.85rem;color:var(--text);background:#0d1424;border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.75rem;cursor:pointer">
+        <input type="checkbox" id="darkModeToggle" checked> Dark Mode
+      </label>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
@@ -980,12 +989,13 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       const btn = document.getElementById('wakeBtn');
       const mt = document.getElementById('sizeSelect').value;
       const dp = document.getElementById('diskSelect').value;
+      const dm = document.getElementById('darkModeToggle').checked;
       btn.disabled = true; btn.textContent = 'Waking...';
       try {
         const res = await fetch('/api/v1/desktops/wake', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({machine_type: mt, disk_profile: dp})
+          body: JSON.stringify({machine_type: mt, disk_profile: dp, dark_mode: dm})
         });
         if (!res.ok) alert('Wake failed: ' + await res.text());
       } catch (e) {

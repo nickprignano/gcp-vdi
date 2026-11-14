@@ -5,6 +5,7 @@ META="http://metadata.google.internal/computeMetadata/v1"
 H="Metadata-Flavor: Google"
 OWNER_EMAIL=$(curl -fsSL -H "$H" "$META/instance/attributes/vdi-owner-email" || echo "unknown@local")
 OWNER_HASH=$(curl -fsSL -H "$H" "$META/instance/attributes/vdi-owner-hash" || echo "default")
+DARK_MODE=$(curl -fsSL -H "$H" "$META/instance/attributes/vdi-dark-mode" || echo "true")
 VM_NAME=$(curl -fsSL -H "$H" "$META/instance/name")
 ZONE=$(curl -fsSL -H "$H" "$META/instance/zone" | awk -F/ '{print $NF}')
 PROJECT=$(curl -fsSL -H "$H" "$META/project/project-id")
@@ -12,7 +13,7 @@ PROJECT=$(curl -fsSL -H "$H" "$META/project/project-id")
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v rustdesk >/dev/null 2>&1; then
   apt-get update -qq
-  apt-get install -y -qq xfce4 xfce4-goodies dbus-x11 xdg-utils rclone fuse3 curl wget jq \
+  apt-get install -y -qq xfce4 xfce4-goodies arc-theme dbus-x11 xdg-utils rclone fuse3 curl wget jq \
     git tmux htop vim unzip zip dnsutils net-tools iputils-ping traceroute openssh-client \
     python3 python3-pip python3-venv %{ if enable_browser_fallback }xrdp%{ endif }
   curl -fsSL -o /tmp/rustdesk.deb "https://github.com/rustdesk/rustdesk/releases/download/1.3.2/rustdesk-1.3.2-x86_64.deb"
@@ -51,10 +52,41 @@ EOF
 
 # Restore user home directory from GCS
 rclone sync "gcs:${home_bucket_name}/users/$OWNER_HASH/home" /home/vdi --create-empty-src-dirs || true
-mkdir -p /home/vdi/.config/xfce4
+mkdir -p /home/vdi/.config/xfce4/xfconf/xfce-perchannel-xml
 if [ ! -f /home/vdi/.config/xfce4/helpers.rc ]; then
   echo "WebBrowser=google-chrome" > /home/vdi/.config/xfce4/helpers.rc
 fi
+if [ "$DARK_MODE" = "true" ]; then
+  GTK_THEME="Arc-Dark"
+  PANEL_DARK="true"
+else
+  GTK_THEME="Arc"
+  PANEL_DARK="false"
+fi
+cat <<EOF > /home/vdi/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="$GTK_THEME"/>
+  </property>
+</channel>
+EOF
+cat <<EOF > /home/vdi/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="$GTK_THEME"/>
+  </property>
+</channel>
+EOF
+cat <<EOF > /home/vdi/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="panels" type="empty">
+    <property name="dark-mode" type="bool" value="$PANEL_DARK"/>
+  </property>
+</channel>
+EOF
 chown -R vdi:vdi /home/vdi
 
 # Fetch RustDesk public key from GCS and configure client

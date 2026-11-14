@@ -40,6 +40,8 @@ type Config struct {
 	GuacJSONSecretHex string
 	HourlyRateUSD     float64
 	BootDiskDesc      string
+	Tier              string
+	DocsURL           string
 	IdleSweepEvery    time.Duration
 	MaxVMDuration     time.Duration
 }
@@ -272,6 +274,8 @@ func loadConfig() Config {
 		GuacJSONSecretHex: os.Getenv("GUACAMOLE_JSON_SECRET_KEY"),
 		HourlyRateUSD:    hourlyRate,
 		BootDiskDesc:     envOr("BROKER_BOOT_DISK_DESC", "40 GB pd-balanced"),
+		Tier:             envOr("BROKER_TIER", "Tier 1 · Lab"),
+		DocsURL:          envOr("BROKER_DOCS_URL", "https://github.com/nickprignano/gcp-vdi/blob/main/docs/architecture.md"),
 		IdleSweepEvery:   1 * time.Minute,
 		MaxVMDuration:    time.Duration(maxHours * float64(time.Hour)),
 	}
@@ -811,8 +815,14 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 </head>
 <body>
   <div class="header">
-    <h1>gcp-vdi Portal</h1>
-    <span class="user-pill">{{.Email}}</span>
+    <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap">
+      <h1>gcp-vdi Portal</h1>
+      <span class="user-pill" style="color:#93c5fd;border-color:rgba(59,130,246,0.35)">{{.Tier}}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+      <a class="user-pill" style="text-decoration:none" href="{{.DocsURL}}" target="_blank">Docs ↗</a>
+      <span class="user-pill">{{.Email}}</span>
+    </div>
   </div>
 
   <div class="card">
@@ -821,7 +831,6 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         {{range .Profiles}}<option value="{{.MachineType}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      <span class="rate-pill">Auto-destroy: {{.MaxHours}}h</span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
     <div id="lastSession"></div>
@@ -834,6 +843,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       {{if .RustDeskPubKey}}<br style="margin-bottom:0.4rem">Public Key: <code>{{.RustDeskPubKey}}</code> <button class="btn-copy" onclick="copyText('{{.RustDeskPubKey}}', this)">Copy</button>{{end}}
     </div>
   </div>
+  <div class="meta" style="text-align:center;margin-top:0.75rem">Spot desktops auto-destroy after {{.MaxHours}}h · Home directory syncs to GCS</div>
 
   <script>
     let currentState = { devices: [], hourly_rate_usd: {{.HourlyRateUSD}}, max_vm_seconds: {{.MaxSeconds}}, last_session: null };
@@ -962,6 +972,8 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"MaxHours":        int(b.cfg.MaxVMDuration.Hours()),
 		"MaxSeconds":      int64(b.cfg.MaxVMDuration.Seconds()),
 		"Profiles":        machineProfiles,
+		"Tier":            b.cfg.Tier,
+		"DocsURL":         b.cfg.DocsURL,
 	})
 }
 

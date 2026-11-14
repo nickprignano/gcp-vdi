@@ -12,7 +12,7 @@ PROJECT=$(curl -fsSL -H "$H" "$META/project/project-id")
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v rustdesk >/dev/null 2>&1; then
   apt-get update -qq
-  apt-get install -y -qq xfce4 xfce4-goodies dbus-x11 rclone curl jq python3 %{ if enable_browser_fallback }xrdp%{ endif }
+  apt-get install -y -qq xfce4 xfce4-goodies dbus-x11 rclone fuse3 curl jq python3 %{ if enable_browser_fallback }xrdp%{ endif }
   curl -fsSL -o /tmp/rustdesk.deb "https://github.com/rustdesk/rustdesk/releases/download/1.3.2/rustdesk-1.3.2-x86_64.deb"
   apt-get install -y -qq /tmp/rustdesk.deb || apt-get install -f -y -qq
   rm -f /tmp/rustdesk.deb
@@ -87,9 +87,50 @@ curl -fsSL -X POST "${broker_register_url}" \
 # Periodic 5-min rclone sync + Spot preemption shutdown hook + idle reaper
 cat <<EOF > /usr/local/bin/vdi-sync.sh
 #!/usr/bin/env bash
-rclone sync /home/vdi "gcs:${home_bucket_name}/users/$OWNER_HASH/home" --exclude ".cache/**"
+rclone sync /home/vdi "gcs:${home_bucket_name}/users/$OWNER_HASH/home" --exclude ".cache/**" --exclude "GoogleDrive/**"
 EOF
 chmod +x /usr/local/bin/vdi-sync.sh
+
+# Auto-mount ~/GoogleDrive when [gdrive] remote exists in ~/.config/rclone/rclone.conf (persisted in GCS)
+cat <<'EOF' > /usr/local/bin/mount-gdrive.sh
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p /home/vdi/GoogleDrive
+if grep -q '^\[gdrive\]' /home/vdi/.config/rclone/rclone.conf 2>/dev/null; then
+  exec rclone mount gdrive: /home/vdi/GoogleDrive \
+    --config /home/vdi/.config/rclone/rclone.conf \
+    --vfs-cache-mode writes \
+    --vfs-cache-max-age 1h \
+    --dir-cache-time 30s
+fi
+EOF
+chmod +x /usr/local/bin/mount-gdrive.sh
+
+cat <<'EOF' > /usr/local/bin/connect-gdrive
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$HOME/.config/rclone" "$HOME/GoogleDrive"
+echo "Follow the prompt to authorize Google Drive (remote name: gdrive)..."
+rclone config create gdrive drive scope=drive
+sudo systemctl restart vdi-gdrive
+echo "Mounted at ~/GoogleDrive (persisted across Spot VMs via GCS)."
+EOF
+chmod +x /usr/local/bin/connect-gdrive
+
+cat <<'EOF' > /etc/systemd/system/vdi-gdrive.service
+[Unit]
+Description=Mount Google Drive at ~/GoogleDrive
+After=network-online.target
+[Service]
+User=vdi
+Group=vdi
+ExecStart=/usr/local/bin/mount-gdrive.sh
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable --now vdi-gdrive || true
 
 cat <<'EOF' > /etc/systemd/system/vdi-sync.service
 [Unit]

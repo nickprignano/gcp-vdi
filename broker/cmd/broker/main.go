@@ -71,6 +71,29 @@ func lookupProfile(mt string) (MachineProfile, bool) {
 	return MachineProfile{}, false
 }
 
+type DiskProfile struct {
+	ID     string `json:"id"`
+	SizeGB int    `json:"size_gb"`
+	Type   string `json:"type"`
+	Label  string `json:"label"`
+}
+
+var diskProfiles = []DiskProfile{
+	{ID: "40-pd-balanced", SizeGB: 40, Type: "pd-balanced", Label: "40 GB pd-balanced"},
+	{ID: "100-pd-balanced", SizeGB: 100, Type: "pd-balanced", Label: "100 GB pd-balanced"},
+	{ID: "200-pd-balanced", SizeGB: 200, Type: "pd-balanced", Label: "200 GB pd-balanced"},
+	{ID: "100-pd-ssd", SizeGB: 100, Type: "pd-ssd", Label: "100 GB pd-ssd"},
+}
+
+func lookupDiskProfile(id string) (DiskProfile, bool) {
+	for _, d := range diskProfiles {
+		if d.ID == id {
+			return d, true
+		}
+	}
+	return DiskProfile{}, false
+}
+
 type DeviceRecord struct {
 	ID                string    `json:"id"`
 	OwnerEmail        string    `json:"owner_email"`
@@ -369,6 +392,7 @@ func (b *Broker) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 type wakePayload struct {
 	MachineType string `json:"machine_type"`
+	DiskProfile string `json:"disk_profile"`
 }
 
 func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
@@ -383,9 +407,13 @@ func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		profile, _ = lookupProfile("e2-standard-4")
 	}
+	disk, ok := lookupDiskProfile(wp.DiskProfile)
+	if !ok {
+		disk = diskProfiles[0]
+	}
 
 	vmName := vmNameForEmail(email)
-	if err := b.createGCEInstance(r.Context(), vmName, email, profile.MachineType); err != nil {
+	if err := b.createGCEInstance(r.Context(), vmName, email, profile.MachineType, disk.SizeGB, disk.Type); err != nil {
 		http.Error(w, fmt.Sprintf("wake failed: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -395,7 +423,7 @@ func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 		VMName:        vmName,
 		Kind:          "gcp-spot",
 		MachineType:   profile.MachineType,
-		Specs:         fmt.Sprintf("%d vCPU · %d GB RAM · %s", profile.VCPU, profile.MemoryGB, b.cfg.BootDiskDesc),
+		Specs:         fmt.Sprintf("%d vCPU · %d GB RAM · %s", profile.VCPU, profile.MemoryGB, disk.Label),
 		Zone:          b.cfg.Zone,
 		HourlyRateUSD: profile.HourlyRateUSD,
 		Status:        "PROVISIONING",
@@ -595,7 +623,7 @@ func (b *Broker) gceAccessToken(ctx context.Context) (string, error) {
 	return tok.AccessToken, nil
 }
 
-func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, machineType string) error {
+func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, machineType string, diskSizeGB int, diskType string) error {
 	if b.cfg.ProjectID == "" || b.cfg.InstanceTemplate == "" {
 		return errors.New("GCP_PROJECT_ID and GCE_INSTANCE_TEMPLATE must be configured")
 	}
@@ -606,8 +634,8 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, mach
 	sum := sha256.Sum256([]byte(ownerEmail))
 	ownerHash := hex.EncodeToString(sum[:8])
 
-	// Fetch template metadata so we merge (not overwrite) startup-script/shutdown-script.
-	items := b.templateMetadataItems(ctx, token)
+	// Fetch template metadata and sourceImage so we merge (not overwrite) startup-script/disks.
+	items, sourceImage := b.fetchInstanceTemplate(ctx, token)
 	items = append(items,
 		map[string]string{"key": "vdi-owner-email", "value": ownerEmail},
 		map[string]string{"key": "vdi-owner-hash", "value": ownerHash},
@@ -625,6 +653,19 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, mach
 	}
 	if machineType != "" {
 		body["machineType"] = fmt.Sprintf("zones/%s/machineTypes/%s", b.cfg.Zone, machineType)
+	}
+	if diskSizeGB > 0 && diskType != "" && sourceImage != "" {
+		body["disks"] = []map[string]any{
+			{
+				"boot":       true,
+				"autoDelete": true,
+				"initializeParams": map[string]any{
+					"sourceImage": sourceImage,
+					"diskSizeGb":  strconv.Itoa(diskSizeGB),
+					"diskType":    fmt.Sprintf("zones/%s/diskTypes/%s", b.cfg.Zone, diskType),
+				},
+			},
+		}
 	}
 	raw, _ := json.Marshal(body)
 	url := fmt.Sprintf("https://compute.googleapis.com/compute/v1/projects/%s/zones/%s/instances?sourceInstanceTemplate=%s",
@@ -687,31 +728,40 @@ func (b *Broker) gceInstanceExists(ctx context.Context, vmName string) (bool, st
 	return true, inst.Status, nil
 }
 
-func (b *Broker) templateMetadataItems(ctx context.Context, token string) []map[string]string {
+func (b *Broker) fetchInstanceTemplate(ctx context.Context, token string) ([]map[string]string, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.cfg.InstanceTemplate, nil)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return nil, ""
 	}
 	var tpl struct {
 		Properties struct {
 			Metadata struct {
 				Items []map[string]string `json:"items"`
 			} `json:"metadata"`
+			Disks []struct {
+				InitializeParams struct {
+					SourceImage string `json:"sourceImage"`
+				} `json:"initializeParams"`
+			} `json:"disks"`
 		} `json:"properties"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tpl); err != nil {
-		return nil
+		return nil, ""
 	}
-	return tpl.Properties.Metadata.Items
+	var srcImg string
+	if len(tpl.Properties.Disks) > 0 {
+		srcImg = tpl.Properties.Disks[0].InitializeParams.SourceImage
+	}
+	return tpl.Properties.Metadata.Items, srcImg
 }
 
 func (b *Broker) deleteGCEInstance(ctx context.Context, vmName string) error {
@@ -835,6 +885,9 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       <select id="sizeSelect">
         {{range .Profiles}}<option value="{{.MachineType}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
+      <select id="diskSelect">
+        {{range .DiskProfiles}}<option value="{{.ID}}" {{if eq .ID "40-pd-balanced"}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
@@ -926,12 +979,13 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
     async function wake() {
       const btn = document.getElementById('wakeBtn');
       const mt = document.getElementById('sizeSelect').value;
+      const dp = document.getElementById('diskSelect').value;
       btn.disabled = true; btn.textContent = 'Waking...';
       try {
         const res = await fetch('/api/v1/desktops/wake', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({machine_type: mt})
+          body: JSON.stringify({machine_type: mt, disk_profile: dp})
         });
         if (!res.ok) alert('Wake failed: ' + await res.text());
       } catch (e) {
@@ -977,6 +1031,7 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"MaxHours":        int(b.cfg.MaxVMDuration.Hours()),
 		"MaxSeconds":      int64(b.cfg.MaxVMDuration.Seconds()),
 		"Profiles":        machineProfiles,
+		"DiskProfiles":    diskProfiles,
 		"Tier":            b.cfg.Tier,
 		"DocsURL":         b.cfg.DocsURL,
 	})

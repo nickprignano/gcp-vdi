@@ -64,6 +64,8 @@ services:
       RUSTDESK_PUB_KEY_FILE: "/var/lib/rustdesk/id_ed25519.pub"
       BROKER_REGISTER_SECRET: "${broker_register_secret}"
       ENABLE_BROWSER_FALLBACK: "${enable_browser_fallback}"
+      BROKER_HOURLY_RATE_USD: "${desktop_hourly_rate_usd}"
+      BROKER_MAX_VM_HOURS: "${max_vm_hours}"
     volumes:
       - /var/lib/gcp-vdi:/var/lib/gcp-vdi
       - /var/lib/rustdesk:/var/lib/rustdesk:ro

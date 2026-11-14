@@ -54,3 +54,15 @@ variable "enable_browser_fallback" {
   type        = bool
   default     = true
 }
+
+variable "desktop_hourly_rate_usd" {
+  description = "Estimated hourly compute rate in USD for the live cost meter."
+  type        = number
+  default     = 0.04
+}
+
+variable "max_vm_hours" {
+  description = "Hard maximum desktop lifetime in hours before unconditional auto-destroy."
+  type        = number
+  default     = 8
+}

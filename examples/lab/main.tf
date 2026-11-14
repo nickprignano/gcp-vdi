@@ -106,4 +106,6 @@ module "gateway" {
   instance_template_self_link   = module.desktop_image.instance_template_self_link
   desktop_service_account_email = module.desktop_image.desktop_service_account_email
   enable_browser_fallback       = var.enable_browser_fallback
+  desktop_hourly_rate_usd       = var.desktop_hourly_rate_usd
+  max_vm_hours                  = var.max_vm_hours
 }

@@ -135,3 +135,15 @@ variable "gateway_ip_address" {
   type        = string
   default     = ""
 }
+
+variable "desktop_hourly_rate_usd" {
+  description = "Estimated hourly compute rate in USD displayed on the live session cost meter."
+  type        = number
+  default     = 0.04
+}
+
+variable "max_vm_hours" {
+  description = "Hard maximum desktop lifetime in hours before unconditional auto-destroy."
+  type        = number
+  default     = 8
+}

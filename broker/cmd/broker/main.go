@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type Config struct {
 	RustDeskHost     string
 	RustDeskPubKey   string
 	BrowserFallback  bool
+	HourlyRateUSD    float64
 	IdleSweepEvery   time.Duration
 	MaxVMDuration    time.Duration
 }
@@ -43,19 +45,36 @@ type DeviceRecord struct {
 	RustDeskID        string    `json:"rustdesk_id"`
 	EphemeralPassword string    `json:"ephemeral_password,omitempty"`
 	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+type SessionSummary struct {
+	VMName          string    `json:"vm_name"`
+	DurationSeconds int64     `json:"duration_seconds"`
+	HourlyRateUSD   float64   `json:"hourly_rate_usd"`
+	TotalCostUSD    float64   `json:"total_cost_usd"`
+	Reason          string    `json:"reason"`
+	EndedAt         time.Time `json:"ended_at"`
+}
+
+type persistedState struct {
+	Devices      map[string]DeviceRecord   `json:"devices"`
+	LastSessions map[string]SessionSummary `json:"last_sessions"`
+}
+
 type Store struct {
-	mu      sync.RWMutex
-	path    string
-	devices map[string]DeviceRecord
+	mu           sync.RWMutex
+	path         string
+	devices      map[string]DeviceRecord
+	lastSessions map[string]SessionSummary
 }
 
 func NewStore(path string) (*Store, error) {
 	s := &Store{
-		path:    path,
-		devices: make(map[string]DeviceRecord),
+		path:         path,
+		devices:      make(map[string]DeviceRecord),
+		lastSessions: make(map[string]SessionSummary),
 	}
 	if path == "" {
 		return s, nil
@@ -65,7 +84,15 @@ func NewStore(path string) (*Store, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err == nil {
-		_ = json.Unmarshal(data, &s.devices)
+		var ps persistedState
+		if err := json.Unmarshal(data, &ps); err == nil && ps.Devices != nil {
+			s.devices = ps.Devices
+			if ps.LastSessions != nil {
+				s.lastSessions = ps.LastSessions
+			}
+		} else {
+			_ = json.Unmarshal(data, &s.devices)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -75,16 +102,44 @@ func NewStore(path string) (*Store, error) {
 func (s *Store) Upsert(rec DeviceRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	if existing, ok := s.devices[rec.ID]; ok && !existing.CreatedAt.IsZero() && rec.CreatedAt.IsZero() {
+		rec.CreatedAt = existing.CreatedAt
+	}
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = now
+	}
+	rec.UpdatedAt = now
 	s.devices[rec.ID] = rec
 	return s.persistLocked()
 }
 
-func (s *Store) Delete(id string) error {
+func (s *Store) Get(id string) (DeviceRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.devices[id]
+	return d, ok
+}
+
+func (s *Store) DeleteWithSummary(id string, summary *SessionSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if summary != nil {
+		if rec, ok := s.devices[id]; ok && rec.OwnerEmail != "" {
+			s.lastSessions[strings.ToLower(rec.OwnerEmail)] = *summary
+		}
+	}
 	delete(s.devices, id)
 	return s.persistLocked()
+}
+
+func (s *Store) LastSession(email string) *SessionSummary {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if sum, ok := s.lastSessions[strings.ToLower(strings.TrimSpace(email))]; ok {
+		return &sum
+	}
+	return nil
 }
 
 func (s *Store) ListByOwner(email string) []DeviceRecord {
@@ -113,7 +168,10 @@ func (s *Store) persistLocked() error {
 	if s.path == "" {
 		return nil
 	}
-	data, err := json.MarshalIndent(s.devices, "", "  ")
+	data, err := json.MarshalIndent(persistedState{
+		Devices:      s.devices,
+		LastSessions: s.lastSessions,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -139,6 +197,18 @@ func loadConfig() Config {
 			}
 		}
 	}
+	hourlyRate := 0.04
+	if raw := os.Getenv("BROKER_HOURLY_RATE_USD"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v >= 0 {
+			hourlyRate = v
+		}
+	}
+	maxHours := 8.0
+	if raw := os.Getenv("BROKER_MAX_VM_HOURS"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+			maxHours = v
+		}
+	}
 	return Config{
 		ListenAddr:       envOr("BROKER_LISTEN_ADDR", ":8080"),
 		ProjectID:        os.Getenv("GCP_PROJECT_ID"),
@@ -149,8 +219,9 @@ func loadConfig() Config {
 		RustDeskHost:     os.Getenv("RUSTDESK_HOST"),
 		RustDeskPubKey:   pubKey,
 		BrowserFallback:  os.Getenv("ENABLE_BROWSER_FALLBACK") == "true",
-		IdleSweepEvery:   5 * time.Minute,
-		MaxVMDuration:    12 * time.Hour,
+		HourlyRateUSD:    hourlyRate,
+		IdleSweepEvery:   1 * time.Minute,
+		MaxVMDuration:    time.Duration(maxHours * float64(time.Hour)),
 	}
 }
 
@@ -224,7 +295,10 @@ func (b *Broker) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"user":             email,
 		"rustdesk_host":    b.cfg.RustDeskHost,
 		"rustdesk_pub_key": b.cfg.RustDeskPubKey,
+		"hourly_rate_usd":  b.cfg.HourlyRateUSD,
+		"max_vm_seconds":   int64(b.cfg.MaxVMDuration.Seconds()),
 		"devices":          b.store.ListByOwner(email),
+		"last_session":     b.store.LastSession(email),
 	})
 }
 
@@ -250,6 +324,25 @@ func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, rec)
 }
 
+func (b *Broker) sessionSummaryFor(rec DeviceRecord, reason string) *SessionSummary {
+	if rec.CreatedAt.IsZero() {
+		return nil
+	}
+	secs := int64(time.Since(rec.CreatedAt).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	cost := (float64(secs) / 3600.0) * b.cfg.HourlyRateUSD
+	return &SessionSummary{
+		VMName:          rec.VMName,
+		DurationSeconds: secs,
+		HourlyRateUSD:   b.cfg.HourlyRateUSD,
+		TotalCostUSD:    cost,
+		Reason:          reason,
+		EndedAt:         time.Now().UTC(),
+	}
+}
+
 func (b *Broker) handleStop(w http.ResponseWriter, r *http.Request) {
 	email := callerEmail(r)
 	if email == "" {
@@ -261,8 +354,16 @@ func (b *Broker) handleStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stop failed: %v", err), http.StatusBadGateway)
 		return
 	}
-	_ = b.store.Delete(vmName)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "STOPPED", "vm_name": vmName})
+	var summary *SessionSummary
+	if rec, ok := b.store.Get(vmName); ok {
+		summary = b.sessionSummaryFor(rec, "manual")
+	}
+	_ = b.store.DeleteWithSummary(vmName, summary)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       "STOPPED",
+		"vm_name":      vmName,
+		"last_session": summary,
+	})
 }
 
 type registerPayload struct {
@@ -441,7 +542,7 @@ func (b *Broker) deleteGCEInstance(ctx context.Context, vmName string) error {
 	return nil
 }
 
-// runOrphanSweeper periodically cleans up stale gcp-vdi records that exceed MaxVMDuration.
+// runOrphanSweeper unconditionally destroys cloud desktops after MaxVMDuration (default 8h).
 func (b *Broker) runOrphanSweeper(ctx context.Context) {
 	ticker := time.NewTicker(b.cfg.IdleSweepEvery)
 	defer ticker.Stop()
@@ -452,10 +553,15 @@ func (b *Broker) runOrphanSweeper(ctx context.Context) {
 		case <-ticker.C:
 			cutoff := time.Now().UTC().Add(-b.cfg.MaxVMDuration)
 			for _, rec := range b.store.All() {
-				if rec.Kind != "on-prem" && rec.UpdatedAt.Before(cutoff) {
-					log.Printf("sweeping stale VM %s (last updated %s)", rec.VMName, rec.UpdatedAt)
+				created := rec.CreatedAt
+				if created.IsZero() {
+					created = rec.UpdatedAt
+				}
+				if rec.Kind != "on-prem" && created.Before(cutoff) {
+					log.Printf("auto-destroying VM %s after max lifetime %s (created %s)", rec.VMName, b.cfg.MaxVMDuration, created)
 					if err := b.deleteGCEInstance(ctx, rec.VMName); err == nil {
-						_ = b.store.Delete(rec.ID)
+						summary := b.sessionSummaryFor(rec, "auto-destroy-8h")
+						_ = b.store.DeleteWithSummary(rec.ID, summary)
 					}
 				}
 			}
@@ -499,6 +605,10 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
     .meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
     .creds { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
     .cred-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.2rem; }
+    .meter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-top: 0.85rem; padding: 0.75rem; border-radius: 8px; background: #080d1a; border: 1px solid var(--border); }
+    .meter-val { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #f9fafb; }
+    .summary-banner { margin-top: 0.85rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); font-size: 0.88rem; }
+    .rate-pill { font-size: 0.8rem; color: var(--muted); margin-left: auto; }
   </style>
 </head>
 <body>
@@ -512,8 +622,10 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       <button class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
       <button class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
       {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
+      <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
+    <div id="lastSession"></div>
   </div>
 
   <div class="card">
@@ -525,6 +637,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   </div>
 
   <script>
+    let currentState = { devices: [], hourly_rate_usd: {{.HourlyRateUSD}}, max_vm_seconds: {{.MaxSeconds}}, last_session: null };
     function copyText(txt, btn) {
       navigator.clipboard.writeText(txt);
       const orig = btn.textContent;
@@ -532,36 +645,64 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       setTimeout(() => btn.textContent = orig, 1500);
     }
     function esc(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-    function render(devices) {
+    function fmtDur(secs) {
+      secs = Math.max(0, Math.floor(secs));
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+      return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+    }
+    function render() {
       const el = document.getElementById('devices');
-      if (!devices || devices.length === 0) {
+      const lsEl = document.getElementById('lastSession');
+      const devices = currentState.devices || [];
+      const rate = Number(currentState.hourly_rate_usd || 0);
+      const maxSecs = Number(currentState.max_vm_seconds || 28800);
+
+      if (devices.length === 0) {
         el.innerHTML = '<p class="meta">No active cloud desktops. Click <strong>Wake Cloud Desktop</strong> to launch a Spot VM.</p>';
-        return;
+      } else {
+        el.innerHTML = devices.map(d => {
+          const ready = d.status === 'READY';
+          const badge = ready
+            ? '<span class="badge badge-ready"><span class="dot"></span>READY</span>'
+            : '<span class="badge badge-prov"><span class="dot pulse"></span>PROVISIONING</span>';
+          const statusMsg = ready
+            ? 'Desktop is online and ready for RustDesk or browser connection.'
+            : 'Launching Spot VM, syncing your GCS home directory, and starting desktop services (~60–90s on first boot)...';
+          const createdMs = Date.parse(d.created_at || d.updated_at || new Date().toISOString());
+          const elapsedSecs = Math.max(0, (Date.now() - createdMs) / 1000);
+          const runningCost = (elapsedSecs / 3600) * rate;
+          const remainSecs = Math.max(0, maxSecs - elapsedSecs);
+          const meter = d.kind !== 'on-prem' ? '<div class="meter-grid">' +
+            '<div><div class="cred-label">Running Cost</div><div class="meter-val">$' + runningCost.toFixed(4) + '</div></div>' +
+            '<div><div class="cred-label">Session Elapsed</div><div class="meter-val">' + fmtDur(elapsedSecs) + '</div></div>' +
+            '<div><div class="cred-label">Auto-Destroy In</div><div class="meter-val">' + fmtDur(remainSecs) + '</div></div>' +
+            '</div>' : '';
+          const creds = ready ? '<div class="creds">' +
+            '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
+            (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
+            '</div>' : '';
+          return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div><div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
+        }).join('');
       }
-      el.innerHTML = devices.map(d => {
-        const ready = d.status === 'READY';
-        const badge = ready
-          ? '<span class="badge badge-ready"><span class="dot"></span>READY</span>'
-          : '<span class="badge badge-prov"><span class="dot pulse"></span>PROVISIONING</span>';
-        const statusMsg = ready
-          ? 'Desktop is online and ready for RustDesk or browser connection.'
-          : 'Launching Spot VM, syncing your GCS home directory, and starting desktop services (~60–90s on first boot)...';
-        const creds = ready ? '<div class="creds">' +
-          '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
-          (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
-          '</div>' : '';
-        return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div><div class="meta">' + statusMsg + '</div>' + creds + '</div>';
-      }).join('');
+
+      const ls = currentState.last_session;
+      if (ls && devices.length === 0) {
+        lsEl.innerHTML = '<div class="summary-banner"><strong>Last Session Destroyed</strong> (' + esc(ls.vm_name) + ' · ' + esc(ls.reason) + ') — Duration: <strong>' + fmtDur(ls.duration_seconds) + '</strong> · Total Session Cost: <strong>$' + Number(ls.total_cost_usd || 0).toFixed(4) + '</strong></div>';
+      } else {
+        lsEl.innerHTML = '';
+      }
     }
     async function refresh() {
       const r = await fetch('/api/v1/desktops/status');
       if (!r.ok) return;
-      const d = await r.json();
-      render(d.devices);
+      currentState = await r.json();
+      render();
     }
     async function wake() { await fetch('/api/v1/desktops/wake', {method:'POST'}); refresh(); }
     async function stopVM() { await fetch('/api/v1/desktops/stop', {method:'POST'}); refresh(); }
-    refresh(); setInterval(refresh, 4000);
+    refresh();
+    setInterval(refresh, 4000);
+    setInterval(render, 1000);
   </script>
 </body>
 </html>`))
@@ -578,6 +719,9 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"RustDeskHost":    b.cfg.RustDeskHost,
 		"RustDeskPubKey":  b.cfg.RustDeskPubKey,
 		"BrowserFallback": b.cfg.BrowserFallback,
+		"HourlyRateUSD":   b.cfg.HourlyRateUSD,
+		"MaxHours":        int(b.cfg.MaxVMDuration.Hours()),
+		"MaxSeconds":      int64(b.cfg.MaxVMDuration.Seconds()),
 	})
 }
 

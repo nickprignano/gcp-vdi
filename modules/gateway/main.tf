@@ -85,6 +85,8 @@ resource "google_compute_instance" "gateway" {
       instance_template_self_link = var.instance_template_self_link
       broker_register_secret      = var.broker_register_secret
       enable_browser_fallback     = tostring(var.enable_browser_fallback)
+      desktop_hourly_rate_usd     = tostring(var.desktop_hourly_rate_usd)
+      max_vm_hours                = tostring(var.max_vm_hours)
       embed_rustdesk              = tostring(var.embed_rustdesk)
       rustdesk_compose_yaml       = replace(var.rustdesk_compose_yaml, "\r\n", "\n")
       home_bucket_name            = var.home_bucket_name

@@ -23,6 +23,20 @@ if ! command -v rustdesk >/dev/null 2>&1; then
   rm -f /tmp/chrome.deb
 fi
 
+# Suppress GNOME Keyring prompts under xrdp ephemeral passwords
+apt-get purge -y -qq gnome-keyring >/dev/null 2>&1 || true
+for f in /etc/xdg/autostart/gnome-keyring-*.desktop; do
+  [ -f "$f" ] && grep -q '^Hidden=' "$f" || { [ -f "$f" ] && echo "Hidden=true" >> "$f"; }
+done
+cat <<'EOF' > /usr/local/bin/google-chrome
+#!/usr/bin/env bash
+exec /usr/bin/google-chrome --password-store=basic "$@"
+EOF
+chmod +x /usr/local/bin/google-chrome
+if [ -f /usr/share/applications/google-chrome.desktop ]; then
+  sed -i 's|/usr/bin/google-chrome-stable|/usr/local/bin/google-chrome|g' /usr/share/applications/google-chrome.desktop || true
+fi
+
 id -u vdi >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo vdi
 echo "vdi ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vdi
 

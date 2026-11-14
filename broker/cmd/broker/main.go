@@ -738,6 +738,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
     button, .btn { border: 0; padding: 0.6rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
     .btn-primary { background: var(--blue); color: #fff; }
     .btn-success { background: var(--green); color: #fff; }
+    .btn-disabled { background: #1f2937; color: #6b7280; border: 1px solid var(--border); cursor: not-allowed; opacity: 0.7; }
     .btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
     .btn-copy { background: #1f2937; color: var(--text); padding: 0.25rem 0.6rem; font-size: 0.78rem; border-radius: 6px; }
     code { background: #030712; padding: 0.2rem 0.45rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); }
@@ -772,7 +773,6 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      {{if .BrowserFallback}}<a class="btn btn-success" href="/api/v1/desktops/browser-launch" target="_blank">Open in Browser</a>{{end}}
       <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
@@ -836,8 +836,14 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
             '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
             (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
             '</div>' : '';
+          const browserFallback = {{.BrowserFallback}};
+          const openBtn = browserFallback
+            ? (ready
+                ? '<a class="btn btn-success" style="padding:0.35rem 0.75rem;font-size:0.8rem" href="/api/v1/desktops/browser-launch" target="_blank">Open in Browser</a>'
+                : '<button class="btn-disabled" style="padding:0.35rem 0.75rem;font-size:0.8rem" disabled title="Waiting for desktop to reach READY">Open in Browser</button>')
+            : '';
           const stopBtn = '<button class="btn-danger" style="padding:0.35rem 0.75rem;font-size:0.8rem"' + (stopping ? ' disabled' : '') + ' onclick="stopVM()">' + (stopping ? 'Stopping...' : 'Stop / Delete Desktop') + '</button>';
-          return '<div class="device"><div class="device-top"><div><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span></div><div style="display:flex;align-items:center;gap:0.6rem">' + badge + stopBtn + '</div></div>' + specsLine + '<div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
+          return '<div class="device"><div class="device-top"><div><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span></div><div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">' + badge + openBtn + stopBtn + '</div></div>' + specsLine + '<div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
         }).join('');
       }
 

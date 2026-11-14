@@ -344,6 +344,14 @@ func (b *Broker) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	devices := b.store.ListByOwner(email)
+	for _, rec := range devices {
+		if rec.Kind != "on-prem" && time.Since(rec.CreatedAt) > 90*time.Second {
+			if exists, _, err := b.gceInstanceExists(r.Context(), rec.VMName); err == nil && !exists {
+				_ = b.store.DeleteWithSummary(rec.ID, b.sessionSummaryFor(rec, "terminated"))
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":             email,
 		"rustdesk_host":    b.cfg.RustDeskHost,
@@ -628,11 +636,51 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, mach
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusConflict {
+	if resp.StatusCode == http.StatusConflict {
+		exists, status, gErr := b.gceInstanceExists(ctx, vmName)
+		if gErr == nil && exists && (status == "RUNNING" || status == "PROVISIONING" || status == "STAGING") {
+			return nil
+		}
+		if status == "" {
+			status = "DELETING"
+		}
+		return fmt.Errorf("previous desktop is still shutting down (%s); wait ~15s and click Wake again", status)
+	}
+	if resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("gce insert %d: %s", resp.StatusCode, string(msg))
 	}
 	return nil
+}
+
+func (b *Broker) gceInstanceExists(ctx context.Context, vmName string) (bool, string, error) {
+	token, err := b.gceAccessToken(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	u := fmt.Sprintf("https://compute.googleapis.com/compute/v1/projects/%s/zones/%s/instances/%s",
+		b.cfg.ProjectID, b.cfg.Zone, vmName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, "", fmt.Errorf("gce get %d", resp.StatusCode)
+	}
+	var inst struct {
+		Status string `json:"status"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&inst)
+	return true, inst.Status, nil
 }
 
 func (b *Broker) templateMetadataItems(ctx context.Context, token string) []map[string]string {

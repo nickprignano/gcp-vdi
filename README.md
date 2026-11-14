@@ -1,8 +1,14 @@
-# `gcp-vdi`
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo/gcp-vdi-wordmark-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/brand/logo/gcp-vdi-wordmark-light.svg">
+    <img alt="gcp-vdi — Terraform-first Cloud VDI on Google Cloud" src="docs/brand/logo/gcp-vdi-wordmark-dark.svg" width="320">
+  </picture>
+</p>
 
 Open-source, Terraform-first, tiered VDI platform on Google Cloud — powered by **self-hosted RustDesk (`hbbs` + `hbbr`, `-k _` keypair enforcement)** with optional Apache Guacamole browser fallback and hybrid on-prem node support.
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture, ADRs, and per-tier cost model.
+See [docs/architecture.md](docs/architecture.md) for the full architecture, ADRs, and per-tier cost model, and [docs/brand/BRAND.md](docs/brand/BRAND.md) for the visual brand and XFCE desktop specification.
 
 ## Tiers
 

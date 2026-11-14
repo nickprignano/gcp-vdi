@@ -97,6 +97,9 @@ module "gateway" {
   machine_type                  = "e2-small"
   boot_disk_type                = "pd-balanced"
   domain                        = var.domain
+  enable_cloud_dns              = var.enable_cloud_dns
+  cloud_dns_zone_name           = var.cloud_dns_zone_name
+  cloud_dns_zone_domain         = var.cloud_dns_zone_domain
   oauth_client_id               = var.oauth_client_id
   oauth_client_secret           = var.oauth_client_secret
   allowed_emails                = var.allowed_emails

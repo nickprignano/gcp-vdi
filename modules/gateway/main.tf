@@ -14,12 +14,38 @@ resource "google_compute_address" "gateway" {
 }
 
 locals {
-  effective_ip = var.allocate_gateway_ip ? google_compute_address.gateway[0].address : var.gateway_ip_address
-  site_host    = var.domain != "" ? var.domain : "${local.effective_ip}.sslip.io"
+  effective_ip    = var.allocate_gateway_ip ? google_compute_address.gateway[0].address : var.gateway_ip_address
+  site_host       = var.domain != "" ? var.domain : "${local.effective_ip}.sslip.io"
+  dns_zone_domain = var.cloud_dns_zone_domain != "" ? var.cloud_dns_zone_domain : var.domain
+  dns_zone_name   = var.enable_cloud_dns && var.domain != "" ? (var.cloud_dns_zone_name != "" ? data.google_dns_managed_zone.existing[0].name : google_dns_managed_zone.vdi[0].name) : ""
   caddyfile = templatefile("${path.module}/templates/Caddyfile.tftpl", {
     site_host       = local.site_host
     broker_upstream = var.broker_upstream_url
   })
+}
+
+data "google_dns_managed_zone" "existing" {
+  count   = var.enable_cloud_dns && var.domain != "" && var.cloud_dns_zone_name != "" ? 1 : 0
+  project = var.project_id
+  name    = var.cloud_dns_zone_name
+}
+
+resource "google_dns_managed_zone" "vdi" {
+  count       = var.enable_cloud_dns && var.domain != "" && var.cloud_dns_zone_name == "" ? 1 : 0
+  project     = var.project_id
+  name        = "gcp-vdi-dns"
+  dns_name    = "${trimsuffix(local.dns_zone_domain, ".")}."
+  description = "Managed by gcp-vdi Terraform"
+}
+
+resource "google_dns_record_set" "gateway" {
+  count        = var.enable_cloud_dns && var.domain != "" ? 1 : 0
+  project      = var.project_id
+  managed_zone = local.dns_zone_name
+  name         = "${trimsuffix(var.domain, ".")}."
+  type         = "A"
+  ttl          = 300
+  rrdatas      = [local.effective_ip]
 }
 
 resource "google_service_account" "gateway" {

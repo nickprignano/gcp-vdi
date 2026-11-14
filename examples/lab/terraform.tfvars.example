@@ -1,7 +1,8 @@
 project_id             = "your-gcp-lab-project"
 region                 = "us-central1"
 zone                   = "us-central1-a"
-domain                 = "" # Leave empty for automatic <ip>.sslip.io TLS
+domain                 = "" # Leave empty for automatic <ip>.sslip.io TLS, or set e.g. "vdi.example.com"
+enable_cloud_dns       = false # Set true for native GCP Cloud DNS (~$0.20/mo); keep false for Cloudflare DNS-only (gray cloud)
 oauth_client_id        = "REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com"
 oauth_client_secret    = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
 allowed_emails         = ["you@gmail.com"]

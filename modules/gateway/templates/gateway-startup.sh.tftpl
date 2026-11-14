@@ -132,7 +132,7 @@ services:
     volumes:
       - /opt/gcp-vdi/guacamole:/etc/guacamole:ro
 EOF
-  docker compose -f /opt/gcp-vdi/guac-compose.yml up -d
+  docker compose -f /opt/gcp-vdi/guac-compose.yml up -d --force-recreate
 fi
 
 docker compose -f /opt/gcp-vdi/docker-compose.yml up -d --pull always

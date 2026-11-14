@@ -778,7 +778,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>gcp-vdi Portal</title>
+  <title>gcp-vdi</title>
   <style>
     :root { --bg: #0b1120; --card: #111827; --border: #1f2937; --text: #f3f4f6; --muted: #9ca3af; --blue: #3b82f6; --green: #10b981; --amber: #f59e0b; --red: #ef4444; }
     body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--bg); color: var(--text); line-height: 1.5; }
@@ -816,7 +816,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 <body>
   <div class="header">
     <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap">
-      <h1>gcp-vdi Portal</h1>
+      <h1>gcp-vdi</h1>
       <span class="user-pill" style="color:#93c5fd;border-color:rgba(59,130,246,0.35)">{{.Tier}}</span>
     </div>
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">

@@ -694,7 +694,6 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      <button id="stopBtn" class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
       {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
       <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
     </div>
@@ -712,6 +711,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 
   <script>
     let currentState = { devices: [], hourly_rate_usd: {{.HourlyRateUSD}}, max_vm_seconds: {{.MaxSeconds}}, last_session: null };
+    let stopping = false;
     function copyText(txt, btn) {
       navigator.clipboard.writeText(txt);
       const orig = btn.textContent;
@@ -758,7 +758,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
             '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
             (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
             '</div>' : '';
-          return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div>' + specsLine + '<div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
+          const stopBtn = '<button class="btn-danger" style="padding:0.35rem 0.75rem;font-size:0.8rem"' + (stopping ? ' disabled' : '') + ' onclick="stopVM()">' + (stopping ? 'Stopping...' : 'Stop / Delete Desktop') + '</button>';
+          return '<div class="device"><div class="device-top"><div><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span></div><div style="display:flex;align-items:center;gap:0.6rem">' + badge + stopBtn + '</div></div>' + specsLine + '<div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
         }).join('');
       }
 
@@ -800,15 +801,15 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       }
     }
     async function stopVM() {
-      const btn = document.getElementById('stopBtn');
-      btn.disabled = true; btn.textContent = 'Stopping...';
+      stopping = true;
+      render();
       try {
         const res = await fetch('/api/v1/desktops/stop', {method:'POST'});
         if (!res.ok) alert('Stop failed: ' + await res.text());
       } catch (e) {
         alert('Stop error: ' + e.message);
       } finally {
-        btn.disabled = false; btn.textContent = 'Stop / Delete Desktop';
+        stopping = false;
         refresh();
       }
     }

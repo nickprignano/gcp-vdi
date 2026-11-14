@@ -42,7 +42,7 @@ services:
       OAUTH2_PROXY_CLIENT_SECRET: "${oauth_client_secret}"
       OAUTH2_PROXY_COOKIE_SECRET: "${cookie_secret}"
       OAUTH2_PROXY_HTTP_ADDRESS: "127.0.0.1:4180"
-      OAUTH2_PROXY_UPSTREAMS: "${broker_upstream}"
+      OAUTH2_PROXY_UPSTREAMS: "${enable_browser_fallback == "true" ? "${broker_upstream}/,http://127.0.0.1:8081/guacamole/" : broker_upstream}"
       OAUTH2_PROXY_REDIRECT_URL: "https://${site_host}/oauth2/callback"
       OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE: "/etc/oauth2-proxy/allowed_emails.txt"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
@@ -82,6 +82,46 @@ EOF
     fi
     sleep 2
   done
+fi
+
+if [ "${enable_browser_fallback}" = "true" ]; then
+  mkdir -p /opt/gcp-vdi/guacamole
+  FIRST_EMAIL=$(head -n1 /opt/gcp-vdi/allowed_emails.txt | tr '[:upper:]' '[:lower:]' | xargs)
+  VM_HASH=$(printf '%s' "$FIRST_EMAIL" | sha256sum | cut -c1-12)
+  cat <<EOF > /opt/gcp-vdi/guacamole/user-mapping.xml
+<user-mapping>
+  <authorize username="vdi" password="">
+    <connection name="gcp-vdi-desktop">
+      <protocol>rdp</protocol>
+      <param name="hostname">vdi-$VM_HASH.${zone}.c.${project_id}.internal</param>
+      <param name="port">3389</param>
+      <param name="ignore-cert">true</param>
+      <param name="security">any</param>
+    </connection>
+  </authorize>
+</user-mapping>
+EOF
+  cat <<'EOF' > /opt/gcp-vdi/guac-compose.yml
+services:
+  guacd:
+    image: guacamole/guacd:1.5.5
+    container_name: guacd
+    restart: unless-stopped
+  guacamole:
+    image: guacamole/guacamole:1.5.5
+    container_name: guacamole
+    ports:
+      - "127.0.0.1:8081:8080"
+    restart: unless-stopped
+    environment:
+      GUACD_HOSTNAME: "guacd"
+      GUACD_PORT: "4822"
+      GUACAMOLE_HOME: "/etc/guacamole"
+      CATALINA_OPTS: "-Xms128m -Xmx256m"
+    volumes:
+      - /opt/gcp-vdi/guacamole:/etc/guacamole:ro
+EOF
+  docker compose -f /opt/gcp-vdi/guac-compose.yml up -d
 fi
 
 docker compose -f /opt/gcp-vdi/docker-compose.yml up -d

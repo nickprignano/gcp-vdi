@@ -113,9 +113,9 @@ variable "desktop_service_account_email" {
 }
 
 variable "enable_browser_fallback" {
-  description = "Enable optional Apache Guacamole (guacd + guacamole) container on gateway."
+  description = "Enable Apache Guacamole (guacd + guacamole) container on gateway."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_enterprise_ingress" {

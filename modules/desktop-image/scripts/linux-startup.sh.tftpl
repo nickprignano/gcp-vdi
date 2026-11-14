@@ -50,8 +50,14 @@ EOF
 cp /root/.config/rustdesk/RustDesk2.toml /home/vdi/.config/rustdesk/RustDesk2.toml
 chown -R vdi:vdi /home/vdi/.config/rustdesk
 
-# Generate ephemeral per-boot RustDesk password and register with broker
-EPHEMERAL_PW=$(tr -dc 'A-Za-z0-9!@#%' </dev/urandom | head -c 20 || openssl rand -base64 16)
+# Generate ephemeral per-boot password and register with broker
+EPHEMERAL_PW=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || openssl rand -hex 10)
+%{ if enable_browser_fallback }
+echo "vdi:$EPHEMERAL_PW" | chpasswd
+echo "xfce4-session" > /home/vdi/.xsession
+chown vdi:vdi /home/vdi/.xsession
+systemctl enable --now xrdp
+%{ endif }
 systemctl enable --now rustdesk
 sleep 3
 rustdesk --password "$EPHEMERAL_PW" || true

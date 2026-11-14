@@ -493,6 +493,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   <div class="card">
     <button onclick="wake()">Wake Cloud Desktop</button>
     <button class="danger" onclick="stopVM()">Stop / Delete Desktop</button>
+    {{if .BrowserFallback}}<a href="/guacamole/" target="_blank" style="margin-left:0.75rem;display:inline-block;background:#10b981;color:#fff;padding:0.6rem 1rem;border-radius:6px;text-decoration:none;font-weight:600;">Open in Browser</a>{{end}}
     <pre id="out">Loading...</pre>
   </div>
   <script>
@@ -516,9 +517,10 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = dashTmpl.Execute(w, map[string]any{
-		"Email":          email,
-		"RustDeskHost":   b.cfg.RustDeskHost,
-		"RustDeskPubKey": b.cfg.RustDeskPubKey,
+		"Email":           email,
+		"RustDeskHost":    b.cfg.RustDeskHost,
+		"RustDeskPubKey":  b.cfg.RustDeskPubKey,
+		"BrowserFallback": b.cfg.BrowserFallback,
 	})
 }
 

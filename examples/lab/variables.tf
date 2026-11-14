@@ -50,7 +50,7 @@ variable "desktop_machine_type" {
 }
 
 variable "enable_browser_fallback" {
-  description = "Enable optional Apache Guacamole browser fallback."
+  description = "Enable Apache Guacamole browser access."
   type        = bool
-  default     = false
+  default     = true
 }

@@ -119,7 +119,7 @@ variable "idle_timeout_minutes" {
 }
 
 variable "enable_browser_fallback" {
-  description = "Install xrdp on Linux desktops for optional Guacamole browser fallback."
+  description = "Install xrdp on Linux desktops for Guacamole browser access."
   type        = bool
-  default     = false
+  default     = true
 }

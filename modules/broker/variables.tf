@@ -54,7 +54,7 @@ variable "enable_firestore" {
 }
 
 variable "enable_browser_fallback" {
-  description = "Whether Guacamole browser fallback is enabled."
+  description = "Whether Guacamole browser access is enabled."
   type        = bool
-  default     = false
+  default     = true
 }

@@ -40,9 +40,9 @@ variable "enable_cloud_nat" {
 }
 
 variable "enable_browser_fallback" {
-  description = "Allow internal TCP 3389 from gateway to desktops for optional Guacamole fallback."
+  description = "Allow internal TCP 3389 from gateway to desktops for Guacamole browser access."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "gateway_tag" {

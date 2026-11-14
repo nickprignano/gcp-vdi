@@ -7,4 +7,4 @@ oauth_client_secret    = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
 allowed_emails         = ["you@gmail.com"]
 broker_register_secret = "replace-with-a-random-32-char-secret"
 desktop_machine_type   = "e2-standard-4"
-enable_browser_fallback = false
+enable_browser_fallback = true

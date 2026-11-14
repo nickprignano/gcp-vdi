@@ -43,6 +43,7 @@ type Config struct {
 	BootDiskDesc      string
 	Tier              string
 	DocsURL           string
+	Summary           string
 	IdleSweepEvery    time.Duration
 	MaxVMDuration     time.Duration
 }
@@ -301,6 +302,7 @@ func loadConfig() Config {
 		BootDiskDesc:     envOr("BROKER_BOOT_DISK_DESC", "40 GB pd-balanced"),
 		Tier:             envOr("BROKER_TIER", "Tier 1 · Lab"),
 		DocsURL:          envOr("BROKER_DOCS_URL", "https://github.com/nickprignano/gcp-vdi/blob/main/docs/architecture.md"),
+		Summary:          envOr("BROKER_SUMMARY", ""),
 		IdleSweepEvery:   1 * time.Minute,
 		MaxVMDuration:    time.Duration(maxHours * float64(time.Hour)),
 	}
@@ -933,8 +935,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   </div>
 
   <p style="margin:0 0 1.25rem;color:var(--muted);font-size:0.9rem">
-    On-demand Ubuntu 24.04 XFCE Spot desktops in Google Cloud, fronted by Google OAuth with 1-click browser SSO or self-hosted RustDesk.
-    Your <code>/home/vdi</code> directory persists to Cloud Storage across sessions (with optional <code>~/GoogleDrive</code> mount), and VMs auto-destroy after {{.MaxHours}}h.
+    {{if .Summary}}{{.Summary}}{{else}}On-demand Ubuntu 24.04 XFCE Spot desktops in Google Cloud (<code>{{.Zone}}</code>), fronted by Google OAuth with {{if .BrowserFallback}}1-click browser SSO or {{end}}self-hosted RustDesk.
+    Your <code>/home/vdi</code> directory persists automatically to Cloud Storage across sessions, and VMs auto-destroy after {{.MaxHours}}h.{{end}}
   </p>
 
   <div class="card">
@@ -1107,6 +1109,8 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"DiskProfiles":    diskProfiles,
 		"Tier":            b.cfg.Tier,
 		"DocsURL":         b.cfg.DocsURL,
+		"Summary":         b.cfg.Summary,
+		"Zone":            b.cfg.Zone,
 	})
 }
 

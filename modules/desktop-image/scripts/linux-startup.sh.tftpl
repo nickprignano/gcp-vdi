@@ -51,7 +51,7 @@ cp /root/.config/rustdesk/RustDesk2.toml /home/vdi/.config/rustdesk/RustDesk2.to
 chown -R vdi:vdi /home/vdi/.config/rustdesk
 
 # Generate ephemeral per-boot password and register with broker
-EPHEMERAL_PW=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || openssl rand -hex 10)
+EPHEMERAL_PW=$(openssl rand -hex 10)
 %{ if enable_browser_fallback }
 echo "vdi:$EPHEMERAL_PW" | chpasswd
 echo "xfce4-session" > /home/vdi/.xsession
@@ -59,14 +59,30 @@ chown vdi:vdi /home/vdi/.xsession
 systemctl enable --now xrdp
 %{ endif }
 systemctl enable --now rustdesk
-sleep 3
-rustdesk --password "$EPHEMERAL_PW" || true
-RD_ID=$(rustdesk --get-id | tr -d '\r\n' || echo "pending")
+RD_ID=""
+for _ in $(seq 1 10); do
+  sleep 2
+  RD_ID=$(HOME=/root rustdesk --get-id 2>/dev/null | tr -d '\r\n' || true)
+  if [[ "$RD_ID" =~ ^[0-9]+$ ]]; then
+    break
+  fi
+done
+HOME=/root rustdesk --password "$EPHEMERAL_PW" || true
+if [ -z "$RD_ID" ]; then
+  RD_ID="$VM_NAME"
+fi
+
+PAYLOAD=$(jq -n \
+  --arg owner "$OWNER_EMAIL" \
+  --arg vm "$VM_NAME" \
+  --arg id "$RD_ID" \
+  --arg pw "$EPHEMERAL_PW" \
+  '{owner_email:$owner, vm_name:$vm, kind:"gcp-spot", rustdesk_id:$id, ephemeral_password:$pw}')
 
 curl -fsSL -X POST "${broker_register_url}" \
   -H "Authorization: Bearer ${broker_register_secret}" \
   -H "Content-Type: application/json" \
-  -d "{\"owner_email\":\"$OWNER_EMAIL\",\"vm_name\":\"$VM_NAME\",\"kind\":\"gcp-spot\",\"rustdesk_id\":\"$RD_ID\",\"ephemeral_password\":\"$EPHEMERAL_PW\"}" || true
+  -d "$PAYLOAD" || true
 
 # Periodic 5-min rclone sync + Spot preemption shutdown hook + idle reaper
 cat <<EOF > /usr/local/bin/vdi-sync.sh

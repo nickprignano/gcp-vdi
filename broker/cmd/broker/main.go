@@ -415,9 +415,11 @@ func (b *Broker) handleStop(w http.ResponseWriter, r *http.Request) {
 	}
 	vmName := vmNameForEmail(email)
 	if err := b.deleteGCEInstance(r.Context(), vmName); err != nil {
+		log.Printf("stop failed vm=%s user=%s: %v", vmName, email, err)
 		http.Error(w, fmt.Sprintf("stop failed: %v", err), http.StatusBadGateway)
 		return
 	}
+	log.Printf("stopped vm=%s user=%s", vmName, email)
 	var summary *SessionSummary
 	if rec, ok := b.store.Get(vmName); ok {
 		summary = b.sessionSummaryFor(rec, "manual")
@@ -691,8 +693,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       <select id="sizeSelect" onchange="updateRatePill()">
         {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
-      <button class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      <button class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
+      <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
+      <button id="stopBtn" class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
       {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
       <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
     </div>
@@ -780,15 +782,36 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       render();
     }
     async function wake() {
+      const btn = document.getElementById('wakeBtn');
       const mt = document.getElementById('sizeSelect').value;
-      await fetch('/api/v1/desktops/wake', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({machine_type: mt})
-      });
-      refresh();
+      btn.disabled = true; btn.textContent = 'Waking...';
+      try {
+        const res = await fetch('/api/v1/desktops/wake', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({machine_type: mt})
+        });
+        if (!res.ok) alert('Wake failed: ' + await res.text());
+      } catch (e) {
+        alert('Wake error: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'Wake Cloud Desktop';
+        refresh();
+      }
     }
-    async function stopVM() { await fetch('/api/v1/desktops/stop', {method:'POST'}); refresh(); }
+    async function stopVM() {
+      const btn = document.getElementById('stopBtn');
+      btn.disabled = true; btn.textContent = 'Stopping...';
+      try {
+        const res = await fetch('/api/v1/desktops/stop', {method:'POST'});
+        if (!res.ok) alert('Stop failed: ' + await res.text());
+      } catch (e) {
+        alert('Stop error: ' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'Stop / Delete Desktop';
+        refresh();
+      }
+    }
     refresh();
     setInterval(refresh, 4000);
     setInterval(render, 1000);

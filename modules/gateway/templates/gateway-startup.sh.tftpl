@@ -65,6 +65,7 @@ services:
       RUSTDESK_PUB_KEY_FILE: "/var/lib/rustdesk/id_ed25519.pub"
       BROKER_REGISTER_SECRET: "${broker_register_secret}"
       ENABLE_BROWSER_FALLBACK: "${enable_browser_fallback}"
+      GUACAMOLE_JSON_SECRET_KEY: "${guac_json_secret}"
       BROKER_HOURLY_RATE_USD: "${desktop_hourly_rate_usd}"
       BROKER_MAX_VM_HOURS: "${max_vm_hours}"
     volumes:
@@ -88,7 +89,14 @@ EOF
 fi
 
 if [ "${enable_browser_fallback}" = "true" ]; then
-  mkdir -p /opt/gcp-vdi/guacamole
+  mkdir -p /opt/gcp-vdi/guacamole/extensions
+  if [ ! -f /opt/gcp-vdi/guacamole/extensions/guacamole-auth-json-1.5.5.jar ]; then
+    curl -fsSL "https://archive.apache.org/dist/guacamole/1.5.5/binary/guacamole-auth-json-1.5.5.tar.gz" \
+      | tar -xz --strip-components=1 -C /opt/gcp-vdi/guacamole/extensions "guacamole-auth-json-1.5.5/guacamole-auth-json-1.5.5.jar"
+  fi
+  cat <<EOF > /opt/gcp-vdi/guacamole/guacamole.properties
+json-secret-key: ${guac_json_secret}
+EOF
   FIRST_EMAIL=$(head -n1 /opt/gcp-vdi/allowed_emails.txt | tr '[:upper:]' '[:lower:]' | xargs)
   VM_HASH=$(printf '%s' "$FIRST_EMAIL" | sha256sum | cut -c1-12)
   cat <<EOF > /opt/gcp-vdi/guacamole/user-mapping.xml

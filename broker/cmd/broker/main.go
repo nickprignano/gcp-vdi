@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,19 +28,20 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	ProjectID        string
-	Zone             string
-	InstanceTemplate string
-	StateFile        string
-	RegisterSecret   string
-	RustDeskHost     string
-	RustDeskPubKey   string
-	BrowserFallback  bool
-	HourlyRateUSD    float64
-	BootDiskDesc     string
-	IdleSweepEvery   time.Duration
-	MaxVMDuration    time.Duration
+	ListenAddr        string
+	ProjectID         string
+	Zone              string
+	InstanceTemplate  string
+	StateFile         string
+	RegisterSecret    string
+	RustDeskHost      string
+	RustDeskPubKey    string
+	BrowserFallback   bool
+	GuacJSONSecretHex string
+	HourlyRateUSD     float64
+	BootDiskDesc      string
+	IdleSweepEvery    time.Duration
+	MaxVMDuration     time.Duration
 }
 
 type MachineProfile struct {
@@ -262,7 +268,8 @@ func loadConfig() Config {
 		RegisterSecret:   os.Getenv("BROKER_REGISTER_SECRET"),
 		RustDeskHost:     os.Getenv("RUSTDESK_HOST"),
 		RustDeskPubKey:   pubKey,
-		BrowserFallback:  os.Getenv("ENABLE_BROWSER_FALLBACK") == "true",
+		BrowserFallback:   os.Getenv("ENABLE_BROWSER_FALLBACK") == "true",
+		GuacJSONSecretHex: os.Getenv("GUACAMOLE_JSON_SECRET_KEY"),
 		HourlyRateUSD:    hourlyRate,
 		BootDiskDesc:     envOr("BROKER_BOOT_DISK_DESC", "40 GB pd-balanced"),
 		IdleSweepEvery:   1 * time.Minute,
@@ -302,6 +309,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/desktops/status", b.handleStatus)
 	mux.HandleFunc("POST /api/v1/desktops/wake", b.handleWake)
 	mux.HandleFunc("POST /api/v1/desktops/stop", b.handleStop)
+	mux.HandleFunc("GET /api/v1/desktops/browser-launch", b.handleBrowserLaunch)
 	mux.HandleFunc("POST /api/v1/devices/register", b.handleRegister)
 
 	srv := &http.Server{
@@ -430,6 +438,76 @@ func (b *Broker) handleStop(w http.ResponseWriter, r *http.Request) {
 		"vm_name":      vmName,
 		"last_session": summary,
 	})
+}
+
+func (b *Broker) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
+	email := callerEmail(r)
+	if email == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	vmName := vmNameForEmail(email)
+	rec, ok := b.store.Get(vmName)
+	if !ok || rec.Status != "READY" || rec.EphemeralPassword == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprint(w, `<!doctype html><html><head><meta http-equiv="refresh" content="3;url=/"></head><body style="font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:2rem"><h3>Desktop is not READY yet</h3><p>Wait for status to become READY in the portal, then click Open in Browser again. Returning to portal...</p></body></html>`)
+		return
+	}
+	if b.cfg.GuacJSONSecretHex == "" {
+		http.Redirect(w, r, "/guacamole/", http.StatusFound)
+		return
+	}
+	hostname := fmt.Sprintf("%s.%s.c.%s.internal", rec.VMName, b.cfg.Zone, b.cfg.ProjectID)
+	payload := map[string]any{
+		"username": email,
+		"expires":  time.Now().Add(2 * time.Minute).UnixMilli(),
+		"connections": map[string]any{
+			rec.VMName: map[string]any{
+				"protocol": "rdp",
+				"parameters": map[string]string{
+					"hostname":    hostname,
+					"port":        "3389",
+					"username":    "vdi",
+					"password":    rec.EphemeralPassword,
+					"ignore-cert": "true",
+					"security":    "any",
+				},
+			},
+		},
+	}
+	token, err := encryptGuacJSON(b.cfg.GuacJSONSecretHex, payload)
+	if err != nil {
+		log.Printf("guacamole-auth-json encrypt error: %v", err)
+		http.Error(w, "failed to mint SSO token", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/guacamole/?data="+url.QueryEscape(token), http.StatusFound)
+}
+
+func encryptGuacJSON(secretHex string, payload any) (string, error) {
+	key, err := hex.DecodeString(strings.TrimSpace(secretHex))
+	if err != nil || len(key) != 16 {
+		return "", fmt.Errorf("invalid 128-bit hex key")
+	}
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(jsonBytes)
+	plain := append(mac.Sum(nil), jsonBytes...)
+	padLen := aes.BlockSize - (len(plain) % aes.BlockSize)
+	for i := 0; i < padLen; i++ {
+		plain = append(plain, byte(padLen))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	ciphertext := make([]byte, len(plain))
+	cipher.NewCBCEncrypter(block, make([]byte, aes.BlockSize)).CryptBlocks(ciphertext, plain)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 type registerPayload struct {
@@ -694,7 +772,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
+      {{if .BrowserFallback}}<a class="btn btn-success" href="/api/v1/desktops/browser-launch" target="_blank">Open in Browser</a>{{end}}
       <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>

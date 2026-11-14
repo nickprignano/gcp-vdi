@@ -2,6 +2,10 @@ resource "random_id" "cookie_secret" {
   byte_length = 16
 }
 
+resource "random_id" "guac_json_secret" {
+  byte_length = 16
+}
+
 resource "google_compute_address" "gateway" {
   count   = var.allocate_gateway_ip ? 1 : 0
   project = var.project_id
@@ -85,6 +89,7 @@ resource "google_compute_instance" "gateway" {
       instance_template_self_link = var.instance_template_self_link
       broker_register_secret      = var.broker_register_secret
       enable_browser_fallback     = tostring(var.enable_browser_fallback)
+      guac_json_secret            = random_id.guac_json_secret.hex
       desktop_hourly_rate_usd     = tostring(var.desktop_hourly_rate_usd)
       max_vm_hours                = tostring(var.max_vm_hours)
       embed_rustdesk              = tostring(var.embed_rustdesk)

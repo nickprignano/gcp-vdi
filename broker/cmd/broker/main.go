@@ -817,11 +817,11 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 
   <div class="card">
     <div class="actions">
-      <select id="sizeSelect" onchange="updateRatePill()">
-        {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
+      <select id="sizeSelect">
+        {{range .Profiles}}<option value="{{.MachineType}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
-      <span class="rate-pill" id="ratePill">Rate: ${{printf "%.3f" .HourlyRateUSD}}/hr · Auto-destroy: {{.MaxHours}}h</span>
+      <span class="rate-pill">Auto-destroy: {{.MaxHours}}h</span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
     <div id="lastSession"></div>
@@ -901,12 +901,6 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
       } else {
         lsEl.innerHTML = '';
       }
-    }
-    function updateRatePill() {
-      const sel = document.getElementById('sizeSelect');
-      const opt = sel.options[sel.selectedIndex];
-      const r = Number(opt.dataset.rate || {{.HourlyRateUSD}});
-      document.getElementById('ratePill').textContent = 'Rate: $' + r.toFixed(3) + '/hr · Auto-destroy: {{.MaxHours}}h';
     }
     async function refresh() {
       const r = await fetch('/api/v1/desktops/status');

@@ -475,36 +475,93 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gcp-vdi Portal</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #0f172a; color: #e2e8f0; }
-    .card { background: #1e293b; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; border: 1px solid #334155; }
-    button { background: #3b82f6; color: white; border: 0; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    button.danger { background: #ef4444; }
-    code { background: #0f172a; padding: 0.2rem 0.4rem; border-radius: 4px; }
-    a { color: #60a5fa; }
+    :root { --bg: #0b1120; --card: #111827; --border: #1f2937; --text: #f3f4f6; --muted: #9ca3af; --blue: #3b82f6; --green: #10b981; --amber: #f59e0b; --red: #ef4444; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--bg); color: var(--text); line-height: 1.5; }
+    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.5rem; }
+    .header h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.02em; }
+    .user-pill { font-size: 0.85rem; color: var(--muted); background: var(--card); border: 1px solid var(--border); padding: 0.3rem 0.75rem; border-radius: 999px; }
+    .card { background: var(--card); border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1rem; border: 1px solid var(--border); }
+    .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+    button, .btn { border: 0; padding: 0.6rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
+    .btn-primary { background: var(--blue); color: #fff; }
+    .btn-success { background: var(--green); color: #fff; }
+    .btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
+    .btn-copy { background: #1f2937; color: var(--text); padding: 0.25rem 0.6rem; font-size: 0.78rem; border-radius: 6px; }
+    code { background: #030712; padding: 0.2rem 0.45rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); }
+    .device { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.15rem; background: #0d1424; margin-top: 0.75rem; }
+    .device-top { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .badge { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; font-weight: 600; padding: 0.22rem 0.65rem; border-radius: 999px; }
+    .badge-prov { background: rgba(245,158,11,0.15); color: #fcd34d; border: 1px solid rgba(245,158,11,0.35); }
+    .badge-ready { background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.35); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .pulse { animation: pulse 1.4s infinite ease-in-out; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+    .meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+    .creds { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
+    .cred-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.2rem; }
   </style>
 </head>
 <body>
-  <h1>gcp-vdi Portal</h1>
-  <p>Signed in as <strong>{{.Email}}</strong></p>
-  <div class="card">
-    <h3>RustDesk Server Config</h3>
-    <p>ID/Relay Host: <code>{{.RustDeskHost}}</code><br>Public Key: <code>{{.RustDeskPubKey}}</code></p>
+  <div class="header">
+    <h1>gcp-vdi Portal</h1>
+    <span class="user-pill">{{.Email}}</span>
   </div>
+
   <div class="card">
-    <button onclick="wake()">Wake Cloud Desktop</button>
-    <button class="danger" onclick="stopVM()">Stop / Delete Desktop</button>
-    {{if .BrowserFallback}}<a href="/guacamole/" target="_blank" style="margin-left:0.75rem;display:inline-block;background:#10b981;color:#fff;padding:0.6rem 1rem;border-radius:6px;text-decoration:none;font-weight:600;">Open in Browser</a>{{end}}
-    <pre id="out">Loading...</pre>
+    <div class="actions">
+      <button class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
+      <button class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
+      {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
+    </div>
+    <div id="devices"><p class="meta">Checking desktop status...</p></div>
   </div>
+
+  <div class="card">
+    <div class="cred-label">RustDesk Relay Configuration</div>
+    <div class="meta">
+      ID/Relay Host: <code>{{.RustDeskHost}}</code> <button class="btn-copy" onclick="copyText('{{.RustDeskHost}}', this)">Copy</button>
+      {{if .RustDeskPubKey}}<br style="margin-bottom:0.4rem">Public Key: <code>{{.RustDeskPubKey}}</code> <button class="btn-copy" onclick="copyText('{{.RustDeskPubKey}}', this)">Copy</button>{{end}}
+    </div>
+  </div>
+
   <script>
+    function copyText(txt, btn) {
+      navigator.clipboard.writeText(txt);
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = orig, 1500);
+    }
+    function esc(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function render(devices) {
+      const el = document.getElementById('devices');
+      if (!devices || devices.length === 0) {
+        el.innerHTML = '<p class="meta">No active cloud desktops. Click <strong>Wake Cloud Desktop</strong> to launch a Spot VM.</p>';
+        return;
+      }
+      el.innerHTML = devices.map(d => {
+        const ready = d.status === 'READY';
+        const badge = ready
+          ? '<span class="badge badge-ready"><span class="dot"></span>READY</span>'
+          : '<span class="badge badge-prov"><span class="dot pulse"></span>PROVISIONING</span>';
+        const statusMsg = ready
+          ? 'Desktop is online and ready for RustDesk or browser connection.'
+          : 'Launching Spot VM, syncing your GCS home directory, and starting desktop services (~60–90s on first boot)...';
+        const creds = ready ? '<div class="creds">' +
+          '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
+          (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
+          '</div>' : '';
+        return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div><div class="meta">' + statusMsg + '</div>' + creds + '</div>';
+      }).join('');
+    }
     async function refresh() {
       const r = await fetch('/api/v1/desktops/status');
+      if (!r.ok) return;
       const d = await r.json();
-      document.getElementById('out').textContent = JSON.stringify(d.devices, null, 2);
+      render(d.devices);
     }
     async function wake() { await fetch('/api/v1/desktops/wake', {method:'POST'}); refresh(); }
     async function stopVM() { await fetch('/api/v1/desktops/stop', {method:'POST'}); refresh(); }
-    refresh(); setInterval(refresh, 5000);
+    refresh(); setInterval(refresh, 4000);
   </script>
 </body>
 </html>`))

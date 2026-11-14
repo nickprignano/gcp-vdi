@@ -131,6 +131,14 @@ type Broker struct {
 }
 
 func loadConfig() Config {
+	pubKey := os.Getenv("RUSTDESK_PUB_KEY")
+	if pubKey == "" {
+		if f := os.Getenv("RUSTDESK_PUB_KEY_FILE"); f != "" {
+			if raw, err := os.ReadFile(f); err == nil {
+				pubKey = strings.TrimSpace(string(raw))
+			}
+		}
+	}
 	return Config{
 		ListenAddr:       envOr("BROKER_LISTEN_ADDR", ":8080"),
 		ProjectID:        os.Getenv("GCP_PROJECT_ID"),
@@ -139,7 +147,7 @@ func loadConfig() Config {
 		StateFile:        envOr("BROKER_STATE_FILE", "/var/lib/gcp-vdi/state.json"),
 		RegisterSecret:   os.Getenv("BROKER_REGISTER_SECRET"),
 		RustDeskHost:     os.Getenv("RUSTDESK_HOST"),
-		RustDeskPubKey:   os.Getenv("RUSTDESK_PUB_KEY"),
+		RustDeskPubKey:   pubKey,
 		BrowserFallback:  os.Getenv("ENABLE_BROWSER_FALLBACK") == "true",
 		IdleSweepEvery:   5 * time.Minute,
 		MaxVMDuration:    12 * time.Hour,
@@ -340,6 +348,14 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail strin
 	}
 	sum := sha256.Sum256([]byte(ownerEmail))
 	ownerHash := hex.EncodeToString(sum[:8])
+
+	// Fetch template metadata so we merge (not overwrite) startup-script/shutdown-script.
+	items := b.templateMetadataItems(ctx, token)
+	items = append(items,
+		map[string]string{"key": "vdi-owner-email", "value": ownerEmail},
+		map[string]string{"key": "vdi-owner-hash", "value": ownerHash},
+	)
+
 	body := map[string]any{
 		"name": vmName,
 		"labels": map[string]string{
@@ -347,10 +363,7 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail strin
 			"owner-hash": ownerHash,
 		},
 		"metadata": map[string]any{
-			"items": []map[string]string{
-				{"key": "vdi-owner-email", "value": ownerEmail},
-				{"key": "vdi-owner-hash", "value": ownerHash},
-			},
+			"items": items,
 		},
 	}
 	raw, _ := json.Marshal(body)
@@ -372,6 +385,33 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail strin
 		return fmt.Errorf("gce insert %d: %s", resp.StatusCode, string(msg))
 	}
 	return nil
+}
+
+func (b *Broker) templateMetadataItems(ctx context.Context, token string) []map[string]string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.cfg.InstanceTemplate, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var tpl struct {
+		Properties struct {
+			Metadata struct {
+				Items []map[string]string `json:"items"`
+			} `json:"metadata"`
+		} `json:"properties"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tpl); err != nil {
+		return nil
+	}
+	return tpl.Properties.Metadata.Items
 }
 
 func (b *Broker) deleteGCEInstance(ctx context.Context, vmName string) error {

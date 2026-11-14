@@ -61,10 +61,12 @@ services:
       GCP_ZONE: "${zone}"
       GCE_INSTANCE_TEMPLATE: "${instance_template_self_link}"
       RUSTDESK_HOST: "${site_host}"
+      RUSTDESK_PUB_KEY_FILE: "/var/lib/rustdesk/id_ed25519.pub"
       BROKER_REGISTER_SECRET: "${broker_register_secret}"
       ENABLE_BROWSER_FALLBACK: "${enable_browser_fallback}"
     volumes:
       - /var/lib/gcp-vdi:/var/lib/gcp-vdi
+      - /var/lib/rustdesk:/var/lib/rustdesk:ro
 EOF
 
 if [ "${embed_rustdesk}" = "true" ]; then

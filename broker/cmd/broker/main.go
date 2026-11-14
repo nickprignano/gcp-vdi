@@ -72,17 +72,18 @@ func lookupProfile(mt string) (MachineProfile, bool) {
 }
 
 type DiskProfile struct {
-	ID     string `json:"id"`
-	SizeGB int    `json:"size_gb"`
-	Type   string `json:"type"`
-	Label  string `json:"label"`
+	ID            string  `json:"id"`
+	SizeGB        int     `json:"size_gb"`
+	Type          string  `json:"type"`
+	HourlyRateUSD float64 `json:"hourly_rate_usd"`
+	Label         string  `json:"label"`
 }
 
 var diskProfiles = []DiskProfile{
-	{ID: "40-pd-balanced", SizeGB: 40, Type: "pd-balanced", Label: "40 GB pd-balanced"},
-	{ID: "100-pd-balanced", SizeGB: 100, Type: "pd-balanced", Label: "100 GB pd-balanced"},
-	{ID: "200-pd-balanced", SizeGB: 200, Type: "pd-balanced", Label: "200 GB pd-balanced"},
-	{ID: "100-pd-ssd", SizeGB: 100, Type: "pd-ssd", Label: "100 GB pd-ssd"},
+	{ID: "40-pd-balanced", SizeGB: 40, Type: "pd-balanced", HourlyRateUSD: 0.006, Label: "40 GB pd-balanced · $0.006/hr"},
+	{ID: "100-pd-balanced", SizeGB: 100, Type: "pd-balanced", HourlyRateUSD: 0.014, Label: "100 GB pd-balanced · $0.014/hr"},
+	{ID: "200-pd-balanced", SizeGB: 200, Type: "pd-balanced", HourlyRateUSD: 0.027, Label: "200 GB pd-balanced · $0.027/hr"},
+	{ID: "100-pd-ssd", SizeGB: 100, Type: "pd-ssd", HourlyRateUSD: 0.023, Label: "100 GB pd-ssd · $0.023/hr"},
 }
 
 func lookupDiskProfile(id string) (DiskProfile, bool) {
@@ -426,7 +427,7 @@ func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 		MachineType:   profile.MachineType,
 		Specs:         fmt.Sprintf("%d vCPU · %d GB RAM · %s", profile.VCPU, profile.MemoryGB, disk.Label),
 		Zone:          b.cfg.Zone,
-		HourlyRateUSD: profile.HourlyRateUSD,
+		HourlyRateUSD: profile.HourlyRateUSD + disk.HourlyRateUSD,
 		Status:        "PROVISIONING",
 	}
 	_ = b.store.Upsert(rec)
@@ -887,17 +888,20 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
   </p>
 
   <div class="card">
-    <div class="actions">
-      <select id="sizeSelect">
-        {{range .Profiles}}<option value="{{.MachineType}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
+    <div style="display:flex;gap:0.65rem;flex-wrap:wrap;align-items:center">
+      <select id="sizeSelect" onchange="updatePriceBreakdown()">
+        {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
-      <select id="diskSelect">
-        {{range .DiskProfiles}}<option value="{{.ID}}" {{if eq .ID "40-pd-balanced"}}selected{{end}}>{{.Label}}</option>{{end}}
+      <select id="diskSelect" onchange="updatePriceBreakdown()">
+        {{range .DiskProfiles}}<option value="{{.ID}}" data-rate="{{.HourlyRateUSD}}" {{if eq .ID "40-pd-balanced"}}selected{{end}}>{{.Label}}</option>{{end}}
       </select>
       <label style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.85rem;color:var(--text);background:#0d1424;border:1px solid var(--border);border-radius:8px;padding:0.5rem 0.75rem;cursor:pointer">
         <input type="checkbox" id="darkModeToggle" checked> Dark Mode
       </label>
+    </div>
+    <div style="display:flex;gap:0.85rem;flex-wrap:wrap;align-items:center;margin-top:0.75rem;margin-bottom:1rem">
       <button id="wakeBtn" class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
+      <span id="priceBreakdown" style="font-size:0.84rem;color:var(--muted)">Compute $0.040/hr + Disk $0.006/hr = <strong style="color:var(--text)">$0.046/hr</strong></span>
     </div>
     <div id="devices"><p class="meta">Checking desktop status...</p></div>
     <div id="lastSession"></div>
@@ -979,6 +983,15 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         lsEl.innerHTML = '';
       }
     }
+    function updatePriceBreakdown() {
+      const s = document.getElementById('sizeSelect');
+      const d = document.getElementById('diskSelect');
+      const cr = Number(s.options[s.selectedIndex].dataset.rate || 0.040);
+      const dr = Number(d.options[d.selectedIndex].dataset.rate || 0.006);
+      document.getElementById('priceBreakdown').innerHTML =
+        'Compute $' + cr.toFixed(3) + '/hr + Disk $' + dr.toFixed(3) + '/hr = <strong style="color:var(--text)">$' + (cr + dr).toFixed(3) + '/hr</strong>';
+    }
+    updatePriceBreakdown();
     async function refresh() {
       const r = await fetch('/api/v1/desktops/status');
       if (!r.ok) return;

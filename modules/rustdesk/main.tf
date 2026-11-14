@@ -49,7 +49,8 @@ resource "google_compute_instance" "relay" {
     #!/usr/bin/env bash
     set -euo pipefail
     apt-get update -qq
-    apt-get install -y -qq docker.io docker-compose-plugin unattended-upgrades
+    apt-get install -y -qq docker.io unattended-upgrades
+    apt-get install -y -qq docker-compose-v2 || apt-get install -y -qq docker-compose-plugin || true
     mkdir -p /opt/rustdesk /var/lib/rustdesk
     cat <<'EOF' > /opt/rustdesk/docker-compose.yml
     ${templatefile("${path.module}/templates/docker-compose.yml.tftpl", {

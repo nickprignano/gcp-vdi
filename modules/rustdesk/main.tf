@@ -53,10 +53,10 @@ resource "google_compute_instance" "relay" {
     mkdir -p /opt/rustdesk /var/lib/rustdesk
     cat <<'EOF' > /opt/rustdesk/docker-compose.yml
     ${templatefile("${path.module}/templates/docker-compose.yml.tftpl", {
-      image_hbbs = local.image_hbbs
-      image_hbbr = local.image_hbbr
-      relay_host = google_compute_address.relay[0].address
-    })}
+  image_hbbs = local.image_hbbs
+  image_hbbr = local.image_hbbr
+  relay_host = google_compute_address.relay[0].address
+})}
     EOF
     docker compose -f /opt/rustdesk/docker-compose.yml up -d
   EOT

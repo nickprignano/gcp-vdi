@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 jobs:
   terraform:
@@ -41,6 +42,25 @@ jobs:
         run: |
           go vet ./...
           go build -o /tmp/gcp-vdi-broker ./cmd/broker
+
+  publish-broker:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [terraform, broker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: broker
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/gcp-vdi-broker:latest
+            ghcr.io/${{ github.repository_owner }}/gcp-vdi-broker:${{ github.sha }}
 
   packer-golden-image:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

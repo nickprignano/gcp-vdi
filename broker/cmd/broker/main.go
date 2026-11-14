@@ -33,8 +33,34 @@ type Config struct {
 	RustDeskPubKey   string
 	BrowserFallback  bool
 	HourlyRateUSD    float64
+	BootDiskDesc     string
 	IdleSweepEvery   time.Duration
 	MaxVMDuration    time.Duration
+}
+
+type MachineProfile struct {
+	MachineType   string  `json:"machine_type"`
+	VCPU          int     `json:"vcpu"`
+	MemoryGB      int     `json:"memory_gb"`
+	HourlyRateUSD float64 `json:"hourly_rate_usd"`
+	Label         string  `json:"label"`
+}
+
+var machineProfiles = []MachineProfile{
+	{MachineType: "e2-standard-2", VCPU: 2, MemoryGB: 8, HourlyRateUSD: 0.020, Label: "e2-standard-2 (2 vCPU, 8 GB) · $0.020/hr"},
+	{MachineType: "e2-standard-4", VCPU: 4, MemoryGB: 16, HourlyRateUSD: 0.040, Label: "e2-standard-4 (4 vCPU, 16 GB) · $0.040/hr"},
+	{MachineType: "e2-standard-8", VCPU: 8, MemoryGB: 32, HourlyRateUSD: 0.080, Label: "e2-standard-8 (8 vCPU, 32 GB) · $0.080/hr"},
+	{MachineType: "e2-standard-16", VCPU: 16, MemoryGB: 64, HourlyRateUSD: 0.160, Label: "e2-standard-16 (16 vCPU, 64 GB) · $0.160/hr"},
+	{MachineType: "n2-standard-8", VCPU: 8, MemoryGB: 32, HourlyRateUSD: 0.095, Label: "n2-standard-8 (8 vCPU, 32 GB) · $0.095/hr"},
+}
+
+func lookupProfile(mt string) (MachineProfile, bool) {
+	for _, p := range machineProfiles {
+		if p.MachineType == mt {
+			return p, true
+		}
+	}
+	return MachineProfile{}, false
 }
 
 type DeviceRecord struct {
@@ -42,6 +68,10 @@ type DeviceRecord struct {
 	OwnerEmail        string    `json:"owner_email"`
 	VMName            string    `json:"vm_name"`
 	Kind              string    `json:"kind"` // "gcp-spot" | "gcp-standard" | "on-prem"
+	MachineType       string    `json:"machine_type,omitempty"`
+	Specs             string    `json:"specs,omitempty"`
+	Zone              string    `json:"zone,omitempty"`
+	HourlyRateUSD     float64   `json:"hourly_rate_usd,omitempty"`
 	RustDeskID        string    `json:"rustdesk_id"`
 	EphemeralPassword string    `json:"ephemeral_password,omitempty"`
 	Status            string    `json:"status"`
@@ -103,8 +133,22 @@ func (s *Store) Upsert(rec DeviceRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	if existing, ok := s.devices[rec.ID]; ok && !existing.CreatedAt.IsZero() && rec.CreatedAt.IsZero() {
-		rec.CreatedAt = existing.CreatedAt
+	if existing, ok := s.devices[rec.ID]; ok {
+		if !existing.CreatedAt.IsZero() && rec.CreatedAt.IsZero() {
+			rec.CreatedAt = existing.CreatedAt
+		}
+		if rec.MachineType == "" {
+			rec.MachineType = existing.MachineType
+		}
+		if rec.Specs == "" {
+			rec.Specs = existing.Specs
+		}
+		if rec.Zone == "" {
+			rec.Zone = existing.Zone
+		}
+		if rec.HourlyRateUSD == 0 {
+			rec.HourlyRateUSD = existing.HourlyRateUSD
+		}
 	}
 	if rec.CreatedAt.IsZero() {
 		rec.CreatedAt = now
@@ -220,6 +264,7 @@ func loadConfig() Config {
 		RustDeskPubKey:   pubKey,
 		BrowserFallback:  os.Getenv("ENABLE_BROWSER_FALLBACK") == "true",
 		HourlyRateUSD:    hourlyRate,
+		BootDiskDesc:     envOr("BROKER_BOOT_DISK_DESC", "40 GB pd-balanced"),
 		IdleSweepEvery:   1 * time.Minute,
 		MaxVMDuration:    time.Duration(maxHours * float64(time.Hour)),
 	}
@@ -302,23 +347,38 @@ func (b *Broker) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type wakePayload struct {
+	MachineType string `json:"machine_type"`
+}
+
 func (b *Broker) handleWake(w http.ResponseWriter, r *http.Request) {
 	email := callerEmail(r)
 	if email == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	var wp wakePayload
+	_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&wp)
+	profile, ok := lookupProfile(wp.MachineType)
+	if !ok {
+		profile, _ = lookupProfile("e2-standard-4")
+	}
+
 	vmName := vmNameForEmail(email)
-	if err := b.createGCEInstance(r.Context(), vmName, email); err != nil {
+	if err := b.createGCEInstance(r.Context(), vmName, email, profile.MachineType); err != nil {
 		http.Error(w, fmt.Sprintf("wake failed: %v", err), http.StatusBadGateway)
 		return
 	}
 	rec := DeviceRecord{
-		ID:         vmName,
-		OwnerEmail: email,
-		VMName:     vmName,
-		Kind:       "gcp-spot",
-		Status:     "PROVISIONING",
+		ID:            vmName,
+		OwnerEmail:    email,
+		VMName:        vmName,
+		Kind:          "gcp-spot",
+		MachineType:   profile.MachineType,
+		Specs:         fmt.Sprintf("%d vCPU · %d GB RAM · %s", profile.VCPU, profile.MemoryGB, b.cfg.BootDiskDesc),
+		Zone:          b.cfg.Zone,
+		HourlyRateUSD: profile.HourlyRateUSD,
+		Status:        "PROVISIONING",
 	}
 	_ = b.store.Upsert(rec)
 	writeJSON(w, http.StatusAccepted, rec)
@@ -332,11 +392,15 @@ func (b *Broker) sessionSummaryFor(rec DeviceRecord, reason string) *SessionSumm
 	if secs < 0 {
 		secs = 0
 	}
-	cost := (float64(secs) / 3600.0) * b.cfg.HourlyRateUSD
+	rate := rec.HourlyRateUSD
+	if rate <= 0 {
+		rate = b.cfg.HourlyRateUSD
+	}
+	cost := (float64(secs) / 3600.0) * rate
 	return &SessionSummary{
 		VMName:          rec.VMName,
 		DurationSeconds: secs,
-		HourlyRateUSD:   b.cfg.HourlyRateUSD,
+		HourlyRateUSD:   rate,
 		TotalCostUSD:    cost,
 		Reason:          reason,
 		EndedAt:         time.Now().UTC(),
@@ -439,7 +503,7 @@ func (b *Broker) gceAccessToken(ctx context.Context) (string, error) {
 	return tok.AccessToken, nil
 }
 
-func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail string) error {
+func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail, machineType string) error {
 	if b.cfg.ProjectID == "" || b.cfg.InstanceTemplate == "" {
 		return errors.New("GCP_PROJECT_ID and GCE_INSTANCE_TEMPLATE must be configured")
 	}
@@ -466,6 +530,9 @@ func (b *Broker) createGCEInstance(ctx context.Context, vmName, ownerEmail strin
 		"metadata": map[string]any{
 			"items": items,
 		},
+	}
+	if machineType != "" {
+		body["machineType"] = fmt.Sprintf("zones/%s/machineTypes/%s", b.cfg.Zone, machineType)
 	}
 	raw, _ := json.Marshal(body)
 	url := fmt.Sprintf("https://compute.googleapis.com/compute/v1/projects/%s/zones/%s/instances?sourceInstanceTemplate=%s",
@@ -609,6 +676,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
     .meter-val { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #f9fafb; }
     .summary-banner { margin-top: 0.85rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); font-size: 0.88rem; }
     .rate-pill { font-size: 0.8rem; color: var(--muted); margin-left: auto; }
+    select { background: #0d1424; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.85rem; }
+    .specs-line { font-size: 0.83rem; color: #cbd5e1; margin-top: 0.4rem; font-family: ui-monospace, SFMono-Regular, monospace; }
   </style>
 </head>
 <body>
@@ -619,6 +688,9 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 
   <div class="card">
     <div class="actions">
+      <select id="sizeSelect" onchange="updateRatePill()">
+        {{range .Profiles}}<option value="{{.MachineType}}" data-rate="{{.HourlyRateUSD}}" {{if eq .MachineType "e2-standard-4"}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
       <button class="btn-primary" onclick="wake()">Wake Cloud Desktop</button>
       <button class="btn-danger" onclick="stopVM()">Stop / Delete Desktop</button>
       {{if .BrowserFallback}}<a class="btn btn-success" href="/guacamole/" target="_blank">Open in Browser</a>{{end}}
@@ -668,10 +740,13 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
           const statusMsg = ready
             ? 'Desktop is online and ready for RustDesk or browser connection.'
             : 'Launching Spot VM, syncing your GCS home directory, and starting desktop services (~60–90s on first boot)...';
+          const rate = Number(d.hourly_rate_usd || currentState.hourly_rate_usd || 0);
           const createdMs = Date.parse(d.created_at || d.updated_at || new Date().toISOString());
           const elapsedSecs = Math.max(0, (Date.now() - createdMs) / 1000);
           const runningCost = (elapsedSecs / 3600) * rate;
           const remainSecs = Math.max(0, maxSecs - elapsedSecs);
+          const specsText = [d.machine_type, d.specs, d.zone].filter(Boolean).join(' · ');
+          const specsLine = specsText ? '<div class="specs-line">' + esc(specsText) + '</div>' : '';
           const meter = d.kind !== 'on-prem' ? '<div class="meter-grid">' +
             '<div><div class="cred-label">Running Cost</div><div class="meter-val">$' + runningCost.toFixed(4) + '</div></div>' +
             '<div><div class="cred-label">Session Elapsed</div><div class="meter-val">' + fmtDur(elapsedSecs) + '</div></div>' +
@@ -681,7 +756,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
             '<div><div class="cred-label">RustDesk ID</div><code>' + esc(d.rustdesk_id) + '</code> <a class="btn-copy" href="rustdesk://' + esc(d.rustdesk_id) + '">Launch</a></div>' +
             (d.ephemeral_password ? '<div><div class="cred-label">Session Password (vdi)</div><code>••••••••</code> <button class="btn-copy" onclick="copyText(\'' + esc(d.ephemeral_password) + '\', this)">Copy Password</button></div>' : '') +
             '</div>' : '';
-          return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div><div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
+          return '<div class="device"><div class="device-top"><strong>' + esc(d.vm_name || d.id) + '</strong> <span class="meta">(' + esc(d.kind) + ')</span> ' + badge + '</div>' + specsLine + '<div class="meta">' + statusMsg + '</div>' + meter + creds + '</div>';
         }).join('');
       }
 
@@ -692,13 +767,27 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
         lsEl.innerHTML = '';
       }
     }
+    function updateRatePill() {
+      const sel = document.getElementById('sizeSelect');
+      const opt = sel.options[sel.selectedIndex];
+      const r = Number(opt.dataset.rate || {{.HourlyRateUSD}});
+      document.getElementById('ratePill').textContent = 'Rate: $' + r.toFixed(3) + '/hr · Auto-destroy: {{.MaxHours}}h';
+    }
     async function refresh() {
       const r = await fetch('/api/v1/desktops/status');
       if (!r.ok) return;
       currentState = await r.json();
       render();
     }
-    async function wake() { await fetch('/api/v1/desktops/wake', {method:'POST'}); refresh(); }
+    async function wake() {
+      const mt = document.getElementById('sizeSelect').value;
+      await fetch('/api/v1/desktops/wake', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({machine_type: mt})
+      });
+      refresh();
+    }
     async function stopVM() { await fetch('/api/v1/desktops/stop', {method:'POST'}); refresh(); }
     refresh();
     setInterval(refresh, 4000);
@@ -722,6 +811,7 @@ func (b *Broker) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"HourlyRateUSD":   b.cfg.HourlyRateUSD,
 		"MaxHours":        int(b.cfg.MaxVMDuration.Hours()),
 		"MaxSeconds":      int64(b.cfg.MaxVMDuration.Seconds()),
+		"Profiles":        machineProfiles,
 	})
 }
 

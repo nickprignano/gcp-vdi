@@ -18,14 +18,14 @@ resource "google_project_iam_member" "desktop_logging" {
 }
 
 locals {
-  startup_script = templatefile("${path.module}/scripts/linux-startup.sh.tftpl", {
+  startup_script = replace(templatefile("${path.module}/scripts/linux-startup.sh.tftpl", {
     home_bucket_name        = var.home_bucket_name
     rustdesk_host           = var.rustdesk_host
     broker_register_url     = var.broker_register_url
     broker_register_secret  = var.broker_register_secret
     idle_timeout_minutes    = var.idle_timeout_minutes
     enable_browser_fallback = var.enable_browser_fallback
-  })
+  }), "\r\n", "\n")
 }
 
 resource "google_compute_instance_template" "desktop" {

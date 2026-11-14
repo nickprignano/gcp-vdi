@@ -71,9 +71,9 @@ resource "google_compute_instance" "gateway" {
 
   metadata = {
     enable-oslogin = "TRUE"
-    startup-script = templatefile("${path.module}/templates/gateway-startup.sh.tftpl", {
+    startup-script = replace(templatefile("${path.module}/templates/gateway-startup.sh.tftpl", {
       site_host                   = local.site_host
-      caddyfile                   = local.caddyfile
+      caddyfile                   = replace(local.caddyfile, "\r\n", "\n")
       allowed_emails_text         = join("\n", var.allowed_emails)
       oauth_client_id             = var.oauth_client_id
       oauth_client_secret         = var.oauth_client_secret
@@ -86,9 +86,9 @@ resource "google_compute_instance" "gateway" {
       broker_register_secret      = var.broker_register_secret
       enable_browser_fallback     = tostring(var.enable_browser_fallback)
       embed_rustdesk              = tostring(var.embed_rustdesk)
-      rustdesk_compose_yaml       = var.rustdesk_compose_yaml
+      rustdesk_compose_yaml       = replace(var.rustdesk_compose_yaml, "\r\n", "\n")
       home_bucket_name            = var.home_bucket_name
-    })
+    }), "\r\n", "\n")
   }
 }
 

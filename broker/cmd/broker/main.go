@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -312,6 +313,22 @@ func envOr(k, fallback string) string {
 	return fallback
 }
 
+//go:embed assets/favicon.svg assets/favicon.ico assets/portal-header-badge.svg
+var brandAssets embed.FS
+
+func serveEmbeddedAsset(name, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		data, err := brandAssets.ReadFile(name)
+		if err != nil {
+			http.NotFound(w, nil)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(data)
+	}
+}
+
 func main() {
 	cfg := loadConfig()
 	store, err := NewStore(cfg.StateFile)
@@ -333,6 +350,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /favicon.ico", serveEmbeddedAsset("assets/favicon.ico", "image/x-icon"))
+	mux.HandleFunc("GET /favicon.svg", serveEmbeddedAsset("assets/favicon.svg", "image/svg+xml; charset=utf-8"))
+	mux.HandleFunc("GET /portal-header-badge.svg", serveEmbeddedAsset("assets/portal-header-badge.svg", "image/svg+xml; charset=utf-8"))
 	mux.HandleFunc("GET /", b.handleDashboard)
 	mux.HandleFunc("GET /api/v1/desktops/status", b.handleStatus)
 	mux.HandleFunc("POST /api/v1/desktops/wake", b.handleWake)
@@ -836,21 +856,48 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>gcp-vdi</title>
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <style>
-    :root { --bg: #0b1120; --card: #111827; --border: #1f2937; --text: #f3f4f6; --muted: #9ca3af; --blue: #3b82f6; --green: #10b981; --amber: #f59e0b; --red: #ef4444; }
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--bg); color: var(--text); line-height: 1.5; }
-    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.65rem; }
-    .header h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.02em; }
+    :root {
+      --vdi-bg: #0b1120;
+      --vdi-surface: #111827;
+      --vdi-border: #1f2937;
+      --vdi-primary: #3b82f6;
+      --vdi-primary-hover: #60a5fa;
+      --vdi-ready: #10b981;
+      --vdi-ready-tint: rgba(16, 185, 129, 0.14);
+      --vdi-text: #f3f4f6;
+      --vdi-text-muted: #9ca3af;
+      --vdi-font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --vdi-font-display: 'Inter Display', 'Space Grotesk', 'Inter', system-ui, sans-serif;
+      --vdi-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+      --bg: var(--vdi-bg);
+      --card: var(--vdi-surface);
+      --border: var(--vdi-border);
+      --text: var(--vdi-text);
+      --muted: var(--vdi-text-muted);
+      --blue: var(--vdi-primary);
+      --green: var(--vdi-ready);
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    body { font-family: var(--vdi-font-sans); max-width: 760px; margin: 2.5rem auto; padding: 0 1.25rem; background: var(--bg); color: var(--text); line-height: 1.5; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
+    .brand-link { display: inline-flex; align-items: center; gap: 0.6rem; color: var(--vdi-text); font-family: var(--vdi-font-display); font-weight: 700; font-size: 1.45rem; letter-spacing: -0.025em; text-decoration: none; }
+    .brand-link:hover { color: #ffffff; }
     .user-pill { font-size: 0.85rem; color: var(--muted); background: var(--card); border: 1px solid var(--border); padding: 0.3rem 0.75rem; border-radius: 999px; }
     .card { background: var(--card); border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1rem; border: 1px solid var(--border); }
     .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
     button, .btn { border: 0; padding: 0.6rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
-    .btn-primary { background: var(--blue); color: #fff; }
-    .btn-success { background: var(--green); color: #fff; }
+    .btn-primary { background: var(--vdi-primary); color: #fff; }
+    .btn-primary:hover { background: var(--vdi-primary-hover); }
+    .btn-success { background: var(--vdi-ready); color: #fff; }
     .btn-disabled { background: #1f2937; color: #6b7280; border: 1px solid var(--border); cursor: not-allowed; opacity: 0.7; }
     .btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
     .btn-copy { background: #1f2937; color: var(--text); padding: 0.25rem 0.6rem; font-size: 0.78rem; border-radius: 6px; }
-    code { background: #030712; padding: 0.2rem 0.45rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); }
+    code { background: #030712; padding: 0.2rem 0.45rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid var(--border); font-family: var(--vdi-font-mono); }
     .device { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.15rem; background: #0d1424; margin-top: 0.75rem; }
     .device-top { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
     .badge { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; font-weight: 600; padding: 0.22rem 0.65rem; border-radius: 999px; }
@@ -867,13 +914,16 @@ var dashTmpl = template.Must(template.New("dash").Parse(`<!doctype html>
     .summary-banner { margin-top: 0.85rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); font-size: 0.88rem; }
     .rate-pill { font-size: 0.8rem; color: var(--muted); margin-left: auto; }
     select { background: #0d1424; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.75rem; font-size: 0.85rem; }
-    .specs-line { font-size: 0.83rem; color: #cbd5e1; margin-top: 0.4rem; font-family: ui-monospace, SFMono-Regular, monospace; }
+    .specs-line { font-size: 0.83rem; color: #cbd5e1; margin-top: 0.4rem; font-family: var(--vdi-font-mono); }
   </style>
 </head>
 <body>
   <div class="header">
     <div style="display:flex;align-items:center;gap:0.65rem;flex-wrap:wrap">
-      <h1>gcp-vdi</h1>
+      <a href="/" class="brand-link">
+        <img src="/portal-header-badge.svg" alt="" width="36" height="36" />
+        <span>gcp<span style="color:var(--vdi-primary)">-</span>vdi</span>
+      </a>
       <span class="user-pill" style="color:#93c5fd;border-color:rgba(59,130,246,0.35)">{{.Tier}}</span>
     </div>
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">

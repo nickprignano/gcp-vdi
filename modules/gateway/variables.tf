@@ -147,3 +147,21 @@ variable "max_vm_hours" {
   type        = number
   default     = 8
 }
+
+variable "enable_cloud_dns" {
+  description = "Manage a Cloud DNS A record for `domain` natively in GCP (~$0.20/mo per zone). Leave false when using external DNS such as Cloudflare (DNS-only)."
+  type        = bool
+  default     = false
+}
+
+variable "cloud_dns_zone_name" {
+  description = "Optional existing Cloud DNS managed zone name in `project_id`. If empty and `enable_cloud_dns = true`, Terraform creates a new managed zone."
+  type        = string
+  default     = ""
+}
+
+variable "cloud_dns_zone_domain" {
+  description = "Optional DNS zone domain (e.g., example.com) when creating a new Cloud DNS zone. Defaults to `domain`."
+  type        = string
+  default     = ""
+}

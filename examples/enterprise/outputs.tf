@@ -1,6 +1,21 @@
+output "gateway_ip" {
+  description = "Static external IP of the gateway (point your Cloudflare DNS-only A record here)."
+  value       = module.gateway.gateway_ip
+}
+
 output "gateway_url" {
   description = "Enterprise VDI portal URL."
   value       = module.gateway.gateway_url
+}
+
+output "oauth_redirect_uri" {
+  description = "Add this Redirect URI to your Google OAuth2 Web Client."
+  value       = module.gateway.oauth_redirect_uri
+}
+
+output "cloud_dns_name_servers" {
+  description = "Cloud DNS name servers (populated when enable_cloud_dns = true)."
+  value       = module.gateway.cloud_dns_name_servers
 }
 
 output "rustdesk_relay_endpoint" {

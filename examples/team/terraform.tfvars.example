@@ -2,6 +2,7 @@ project_id             = "your-gcp-team-project"
 region                 = "us-central1"
 zone                   = "us-central1-a"
 domain                 = "vdi.example.com"
+enable_cloud_dns       = false # Set true for native GCP Cloud DNS (~$0.20/mo); keep false for Cloudflare DNS-only (gray cloud)
 oauth_client_id        = "REPLACE_WITH_OAUTH_CLIENT_ID.apps.googleusercontent.com"
 oauth_client_secret    = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
 allowed_emails         = ["alice@example.com", "bob@example.com"]

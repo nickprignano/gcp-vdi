@@ -3,14 +3,14 @@ resource "random_id" "cookie_secret" {
 }
 
 resource "google_compute_address" "gateway" {
-  count   = var.gateway_ip_address == "" ? 1 : 0
+  count   = var.allocate_gateway_ip ? 1 : 0
   project = var.project_id
   name    = "gcp-vdi-gateway-ip"
   region  = var.region
 }
 
 locals {
-  effective_ip = var.gateway_ip_address != "" ? var.gateway_ip_address : google_compute_address.gateway[0].address
+  effective_ip = var.allocate_gateway_ip ? google_compute_address.gateway[0].address : var.gateway_ip_address
   site_host    = var.domain != "" ? var.domain : "${local.effective_ip}.sslip.io"
   caddyfile = templatefile("${path.module}/templates/Caddyfile.tftpl", {
     site_host       = local.site_host

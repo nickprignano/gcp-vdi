@@ -124,6 +124,12 @@ variable "enable_enterprise_ingress" {
   default     = false
 }
 
+variable "allocate_gateway_ip" {
+  description = "Set false when passing a pre-allocated gateway_ip_address."
+  type        = bool
+  default     = true
+}
+
 variable "gateway_ip_address" {
   description = "Optional pre-allocated static IP address for the gateway (breaks cycle with desktop-image)."
   type        = string

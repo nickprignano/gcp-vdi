@@ -89,6 +89,7 @@ module "gateway" {
   zone                          = var.zone
   subnetwork_id                 = module.network.subnetwork_id
   gateway_tag                   = module.network.gateway_tag
+  allocate_gateway_ip           = false
   gateway_ip_address            = google_compute_address.gateway.address
   machine_type                  = "e2-micro"
   boot_disk_size_gb             = 30
